@@ -84,32 +84,32 @@ class VectorStore:
         return self._store.as_retriever(search_type=search_type,
                                         search_kwargs=search_kwargs)
     
-if __name__ == "__main__":
-    docs = [
-        Document(page_content="Revenue increased to 10 million dollars"),
-        Document(page_content="Net profit was 2 million dollars"),
-        Document(page_content="Total debt reduced to 5 million"),
-        Document(page_content="Operating cash flow improved")
-    ]
+# if __name__ == "__main__":
+#     docs = [
+#         Document(page_content="Revenue increased to 10 million dollars"),
+#         Document(page_content="Net profit was 2 million dollars"),
+#         Document(page_content="Total debt reduced to 5 million"),
+#         Document(page_content="Operating cash flow improved")
+#     ]
 
-    session = "experiment"
-    try:
-        vector_store = VectorStore(session)
-        logger.info("Building index")
+#     session = "experiment"
+#     try:
+#         vector_store = VectorStore(session)
+#         logger.info("Building index")
         
-        vector_store.build_index(docs)
-        logger.info("Loading retriever")
+#         vector_store.build_index(docs)
+#         logger.info("Loading retriever")
 
-        retriever = vector_store.get_retriever()
+#         retriever = vector_store.get_retriever()
 
-        query = "What is the revenue?"
-        logger.info(f"Running query:{query}")
+#         query = "What is the revenue?"
+#         logger.info(f"Running query:{query}")
         
-        results = retriever.invoke(query)
+#         results = retriever.invoke(query)
         
-        print("\nResults:")
-        for r in results:
-            logger.info(f"{r.page_content}")
+#         print("\nResults:")
+#         for r in results:
+#             logger.info(f"{r.page_content}")
         
-    except Exception as e:
-        logger.exception(f"Error:{str(e)}") 
+#     except Exception as e:
+#         logger.exception(f"Error:{str(e)}") 

@@ -4,6 +4,8 @@ import uuid
 from pathlib import Path
 
 import fitz 
+import json
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document 
 from langchain_community.document_loaders import PyPDFLoader
@@ -83,32 +85,33 @@ class PDFProcessor:
         logger.info(f"Rendered {len(image_paths)} page images from {pdf_path.name}")        
         return image_paths
     
+    
     @staticmethod
     def image_to_base64(image_path: Path) -> str:
         """Read a PNG file and return its base64 string for LLM vision APIs."""
         return base64.b64encode(image_path.read_bytes()).decode("utf-8")
     
 
-# if __name__ == "__main__":
-#     try:
-#         sample_pdf = Path(__file__).parent / Path("sample.pdf")
+if __name__ == "__main__":
+    try:
+        sample_pdf = Path(__file__).parent / Path("sample.pdf")
 
-#         if not sample_pdf.exists():
-#             raise FileNotFoundError("File not found place a pdf document")
+        if not sample_pdf.exists():
+            raise FileNotFoundError("File not found place a pdf document")
         
-#         pdf_processor = PDFProcessor()
+        pdf_processor = PDFProcessor()
 
-#         pdf_bytes = sample_pdf.read_bytes()
+        pdf_bytes = sample_pdf.read_bytes()
 
-#         saved_path = pdf_processor.save_pdf(filename="sample.pdf",
-#                                             content=pdf_bytes)
+        saved_path = pdf_processor.save_pdf(filename="sample.pdf",
+                                            content=pdf_bytes)
         
-#         docs = pdf_processor.extract_documents(saved_path)
-#         images = pdf_processor.extract_page_images(saved_path)
+        docs = pdf_processor.extract_documents(saved_path)
+        images = pdf_processor.extract_page_images(saved_path)
 
-#         logger.info(f"Extracted chunks: {len(docs)}") 
-#         logger.info(f"Extracted images: {len(images)}")
+        logger.info(f"Extracted chunks: {len(docs)}") 
+        logger.info(f"Extracted images: {len(images)}")
         
 
-#     except Exception as e:
-#         logger.exception("PDFProcessor failed")
+    except Exception as e:
+        logger.exception("PDFProcessor failed")
