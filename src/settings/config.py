@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # LLM settings 
     LLM_PROVIDER: str = "openai"
     OPENAI_LLM: str = "gpt-4o-mini"
-    OPENAI_VISION_MODEL: str = "gpt-4o"
+    OPENAI_VISION_MODEL: str = "gpt-4o-mini"
     
     GROQ_LLM: str = "llama-3.3-70b-versatile"
     GROQ_VISION_MODEL: str = "meta-llama/llama-4-scout-17b-16e-instruct"
@@ -82,3 +82,5 @@ def get_vision_llm():
         vision_llm = ChatOpenAI(model=settings.OPENAI_VISION_MODEL,
                                 api_key=settings.OPENAI_API_KEY)
         return vision_llm
+
+settings = get_settings()

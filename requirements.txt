@@ -9,6 +9,8 @@ langchain-mcp-adapters
 
 langgraph
 
+langsmith
+
 deepeval
 
 faiss-cpu
@@ -22,6 +24,7 @@ sentence-transformers
 
 huggingface_hub[hf_xet]
 PyMuPDF
+pypdf
 
 fastapi
 uvicorn[standard]
