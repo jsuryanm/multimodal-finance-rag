@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     DATA_DIR: Path = Path("data")
     FAISS_DIR: Path = Path("faiss_index")
 
+    # PostgreSQL
+    # Format: postgresql://user:password@host:port/dbname
+    DATABASE_URL: str = Field(default="postgresql://postgres:password@localhost:5432/finrag")
+ 
+
+
     # logging
     LOG_LEVEL: str = "INFO"
     

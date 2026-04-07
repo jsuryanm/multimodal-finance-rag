@@ -13,7 +13,6 @@ list_of_files = [
     "src/settings/config.py",
     "src/core/__init__.py",
     "src/core/pdf_processor.py",
-    "src/core/memory.py",
     "src/core/vector_store.py",
     "src/exceptions/__init__.py",
     "src/exceptions/custom_exceptions.py",
