@@ -8,6 +8,7 @@ langchain-huggingface
 langchain-mcp-adapters
 
 langgraph
+langgraph-checkpoint-postgres
 
 langsmith
 
@@ -37,3 +38,7 @@ pydantic-settings
 
 python-multipart
 requests
+
+psycopg2-binary
+sqlalchemy
+asyncpg
