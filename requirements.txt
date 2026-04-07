@@ -1,5 +1,6 @@
 langchain
 langchain-openai
+langchain-groq
 langchain-community
 langchain-core
 langchain-text-splitters
@@ -7,6 +8,8 @@ langchain-huggingface
 langchain-mcp-adapters
 
 langgraph
+
+deepeval
 
 faiss-cpu
 
@@ -28,3 +31,6 @@ streamlit
 loguru
 python-dotenv
 pydantic-settings
+
+python-multipart
+requests
