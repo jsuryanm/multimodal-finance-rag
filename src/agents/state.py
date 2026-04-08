@@ -12,7 +12,7 @@ class FinanceAgentState(MessagesState):
 
     # session tracking
     session_id: str # refers to company a report session 
-    session_id_b: str | None # refers to company b report session (comparision only)
+    session_id_b: Optional[str]  # refers to company b report session (comparision only)
 
     question: Optional[str] = None
 

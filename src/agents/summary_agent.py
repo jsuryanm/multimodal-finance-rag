@@ -17,42 +17,20 @@ from src.settings.config import get_llm
 from src.logger.custom_logger import logger 
 
 class SummaryAgent:
+    """Workflow:
+    Loads memory -> retrieve -> generate -> save_memory"""
+
     def __init__(self):
         self.llm = get_llm()
         self.memory_store = get_long_term_memory()
 
-    def format_docs(self,docs):
+    def _format_docs(self,docs):
         return "\n\n---\n\n".join(f"[Page {doc.metadata.get('page','?')}]\n{doc.page_content}"
                                   for doc in docs)
     
-    def build_rag_chain(self,retriever):
-        prompt = ChatPromptTemplate.from_messages([
-            ("system",SUMMARY_SYSTEM_PROMPT),
-            ("human",(
-                "LONG-TERM MEMORY (previous conversations):\n{memory}\n\n"
-                "RETRIEVED CONTEXT:\n{context}\n\n"
-                "QUESTION: {question}\n\n"
-                "Respond with a JSON object matching FinancialSummary schema."
-                "CRITICAL: Do not include markdown code blocks, backticks (```), or any preamble/post-amble text. The response must begin with { and end with }."
-            ))
-        ])
-
-        chain = (
-            {
-                "context":retriever | self.format_docs,
-                "question":RunnablePassthrough(),
-                "memory":RunnablePassthrough()
-            }
-            | prompt 
-            | self.llm
-            | JsonOutputParser()
-        )
-
-        return chain 
-    
     async def load_memory_node(self,state: FinanceAgentState) -> dict:
-        """Load the long term memory summary from PostgreSQL
-        This tell agent what was discussed in previous sessions."""
+        """Load the long term memory summary from SQLite
+        .This tell agent what was discussed in previous sessions."""
         summary = await self.memory_store.get_memory(state["session_id"])
         logger.info(f"Loaded long-term memory for state {state["session_id"]}")
         return {"long_term_summary":summary or "No previous conversation history"}
@@ -78,34 +56,52 @@ class SummaryAgent:
         """
         question = state["question"]
         documents = state.get("documents",[])
-        memory = state.get("long_term_summary","")
+        memory = state.get("long_term_summary","No previous context.")
         session_id = state["session_id"]
 
-        store = VectorStore(session_id=session_id)
-        retriever = store.get_retriever(search_type="mmr",k=5)
+        context = self._format_docs(documents)
 
-        rag_chain = self.build_rag_chain(retriever)
+        prompt = ChatPromptTemplate.from_messages([
+            ("system",SUMMARY_SYSTEM_PROMPT),
+            (
+                "human",(
+                    "LONG-TERM MEMORY (previous conversations):\n{memory}\n\n"
+                    "RETRIEVED CONTEXT FROM ANNUAL REPORT:\n{context}\n\n"
+                    "QUESTION: {question}\n\n"
+                    "Respond with a JSON object matching FinancialSummary schema."
+                    "CRITICAL: No markdown code blocks, no backticks, no preamble."
+                    "Response must start with { and end with }."
+                ))
+        ])
+
+        rag_chain = prompt | self.llm | JsonOutputParser()
+
         
-        result = await rag_chain.ainvoke({"question":question,
-                                          "memory":memory})
+        result = await rag_chain.ainvoke({"memory":memory,
+                                          "context":context,
+                                          "question":question})
         
         try:
             summary_obj = FinancialSummary(**result)
-            answer = summary_obj.summary
+            answer = summary_obj.summary or str(result)
             structured = summary_obj.model_dump()
-        except AgentError:
+
+        except Exception as e:
+            logger.warning(f"Could not parse FinancialSummary:{e}")
             answer = str(result)
             structured = {"raw":answer}
 
         ai_message = AIMessage(content=answer)
         logger.info(f"Generated answer for session {session_id}")
         return {"answer":answer,
-                "structured_response":structured,
+                "structured_responses": structured,
                 "messages":[ai_message]}
     
 
     async def save_memory_node(self,state: FinanceAgentState) -> dict:
-        """Update the long term memory with summary of conversation"""
+        """Update the long term memory with summary of conversation.
+        This called after every conversation turn so future sessions have context"""
+        
         session_id = state["session_id"]
         question = state.get("question","")
         answer = state.get("answer","")
