@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     GROQ_LLM: str = "llama-3.3-70b-versatile"
     GROQ_VISION_MODEL: str = "meta-llama/llama-4-scout-17b-16e-instruct"
 
+    # tavily api 
+    TAVILY_API_KEY: str = Field(default="")
+
 
     # Embeddings model 
     EMBEDDING_MODEL: str = "jina-embeddings-v3"
@@ -56,10 +59,11 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     
 
-@lru_cache()
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
 
+@lru_cache(maxsize=1)
 def get_llm():
     """Return text LLM based on provider settings"""
     settings = get_settings()
@@ -75,7 +79,8 @@ def get_llm():
                          api_key=settings.OPENAI_API_KEY,
                          max_completion_tokens=settings.MAX_TOKENS)
         return llm 
-    
+
+@lru_cache(maxsize=1)
 def get_vision_llm():
     """Return a vision-capable LLM for chart/image analysis."""
     settings = get_settings()

@@ -22,7 +22,6 @@ torch
 transformers 
 sentence-transformers
 
-
 huggingface_hub[hf_xet]
 PyMuPDF
 pypdf

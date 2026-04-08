@@ -24,7 +24,6 @@ list_of_files = [
     "src/memory/__init__.py",
     "src/memory/checkpoint.py",
     "src/memory/long_term.py",
-    "src/memory/middleware.py",
     "src/models/__init__.py",
     "src/models/schemas.py",
     "src/agents/__init__.py",

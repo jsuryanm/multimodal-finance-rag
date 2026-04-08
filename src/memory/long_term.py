@@ -44,8 +44,8 @@ class LongTermMemory:
             CREATE TABLE IF NOT EXISTS conversation_memory (
                     session_id  TEXT PRIMARY KEY,
                     summary     TEXT NOT NULL DEFAULT '',
-                    created_at  TIMESTAMPZ NOT NULL DEFAULT NOW(),
-                    updated_at  TIMESTAMPZ NOT NULL DEFAULT NOW())
+                    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW())
             """)
             
             logger.info("Long-term memory table ready")
@@ -81,11 +81,12 @@ class LongTermMemory:
             with asyncpg param placeholders"""
             # NOW() refers to timestamp
             await conn.execute("""
-                INSERT INTO conversation_memory (session_id,summary,updated_id)
+                INSERT INTO conversation_memory (session_id,summary,updated_at)
                 VALUES ($1, $2, NOW()) 
                 ON CONFLICT (session_id)
                 DO UPDATE SET summary = $2, updated_at = NOW()
             """,session_id,summary)
+            # This query inserts a conversation summary for session, if session exist update the summary
 
             logger.info(f"Memory saved for session: {session_id}")
         
