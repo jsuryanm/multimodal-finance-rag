@@ -9,7 +9,6 @@ from pydantic import BaseModel
 from src.settings.config import settings 
 from src.logger.custom_logger import logger
 
-DB_PATH = settings.DATA_DIR / "memory.db"
 
 class ConversationMemory(BaseModel):
     """Represent a stored memory entry for a session"""
@@ -33,7 +32,7 @@ class LongTermMemory:
     """
 
     def __init__(self):
-        self.db_path = DB_PATH
+        self.db_path = settings.SQLITE_MEMORY_DB
 
     async def setup(self) -> None:
         async with aiosqlite.connect(self.db_path) as db:
@@ -47,25 +46,7 @@ class LongTermMemory:
                 )""") 
             await db.commit()
             logger.info("SQLite memory table ready")
-    
-    async def setup(self) -> None:
-        """Create the memory table if doesn't exist"""
-        conn = await self._get_connection()
-
-        try:
-            await conn.execute("""
-            CREATE TABLE IF NOT EXISTS conversation_memory (
-                    session_id  TEXT PRIMARY KEY,
-                    summary     TEXT NOT NULL DEFAULT '',
-                    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW())
-            """)
-            
-            logger.info("Long-term memory table ready")
         
-        finally:
-            await conn.close()
-    
     async def get_memory(self,session_id: str) -> Optional[str]:
         """
         Retrieves the stored summary for a session 
