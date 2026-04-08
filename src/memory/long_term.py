@@ -47,10 +47,6 @@ class LongTermMemory:
                 )""") 
             await db.commit()
             logger.info("SQLite memory table ready")
-
-    async def _get_connection(self) -> asyncpg.Connection:
-        """Get the raw async conneciton to PostGRESQL"""
-        return await asyncpg.connect(settings.DATABASE_URL)
     
     async def setup(self) -> None:
         """Create the memory table if doesn't exist"""
