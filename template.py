@@ -32,8 +32,6 @@ list_of_files = [
     "src/agents/orchestrator_agent.py",
     "src/agents/summary_agent.py",
     "src/agents/state.py",
-    "src/tools/__init__.py",
-    "src/tools/stock_price.py",
     "src/mcp_server/__init__.py",
     "src/mcp_server/server.py",
     "src/logger/__init__.py",

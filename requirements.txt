@@ -6,6 +6,7 @@ langchain-core
 langchain-text-splitters
 langchain-huggingface
 langchain-mcp-adapters
+langchain-tavily
 
 langgraph
 langgraph-checkpoint-sqlite
@@ -17,6 +18,8 @@ deepeval
 faiss-cpu
 
 mcp[cli]
+
+tavily-python
 
 torch
 transformers 
