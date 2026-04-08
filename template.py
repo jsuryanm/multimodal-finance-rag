@@ -40,6 +40,7 @@ list_of_files = [
     "src/logger/__init__.py",
     "src/logger/custom_logger.py",
     "backend/__init__.py",
+    "backend/models/schemas.py",
     "backend/app.py",
     "frontend/__init__.py",
     "frontend/app.py",

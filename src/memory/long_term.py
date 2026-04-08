@@ -17,7 +17,7 @@ class ConversationMemory(BaseModel):
     created_at: datetime 
     updated_at: datetime
 
-class LongTerm:
+class LongTermMemory:
     """
     Manages long-term memory in PostgreSQL.
     
@@ -63,7 +63,8 @@ class LongTerm:
             row = await conn.fetchrow("""
                     SELECT summary 
                         FROM conversation_memory 
-                    WHERE session_id = $1""",session_id) # $1 insert the first parameter here safely
+                    WHERE session_id = $1""",session_id) 
+            # $1 insert the first parameter (session_id) here safely
             
             return row["summary"] if row else None 
         
@@ -73,3 +74,38 @@ class LongTerm:
     async def save_memory(self,session_id: str,summary: str) -> None:
         """Upsert the memory summary for a session. 
         Called after each conversation turn to update the summary"""
+        
+        conn = await self._get_connection()
+        try:
+            """This is an upsert(insert or update) query 
+            with asyncpg param placeholders"""
+            # NOW() refers to timestamp
+            await conn.execute("""
+                INSERT INTO conversation_memory (session_id,summary,updated_id)
+                VALUES ($1, $2, NOW()) 
+                ON CONFLICT (session_id)
+                DO UPDATE SET summary = $2, updated_at = NOW()
+            """,session_id,summary)
+
+            logger.info(f"Memory saved for session: {session_id}")
+        
+        finally:
+            await conn.close()
+    
+    async def delete_memory(self,session_id: str) -> None:
+        """Clear memory for a session (useful for testing or reset)."""
+        conn = await self._get_connection()
+
+        try:
+            await conn.execute("DELETE FROM conversation_memory WHERE session_id = $1",session_id)
+
+        finally:
+            await conn.close()
+
+_long_term_memory: Optional[LongTermMemory] = None
+
+def get_long_term_memory() -> LongTermMemory:
+    global _long_term_memory
+    if _long_term_memory is None:
+        _long_term_memory = LongTermMemory()
+    return _long_term_memory

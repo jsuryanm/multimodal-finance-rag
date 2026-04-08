@@ -42,3 +42,5 @@ requests
 psycopg2-binary
 sqlalchemy
 asyncpg
+
+yfinance
