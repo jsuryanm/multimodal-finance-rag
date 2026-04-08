@@ -39,7 +39,7 @@ class SummaryAgent:
         """Use FAISS vector store to retrieve relevant chunks for the question.
         Uses MMR (Maximal Marginal Relevance) to reduce redundancy in results.
         """
-        question = state["question"]
+        question = state["question"] or state["messages"][-1].content
         session_id = state["session_id"]
 
         store = VectorStore(session_id=session_id)
@@ -121,21 +121,65 @@ class SummaryAgent:
         logger.info(f"Memory updated for session {session_id}")
         
         return {"summaries":[new_summary]}
+    
+    async def run(self,state: FinanceAgentState) -> dict:
+        try:
+            memory_update = await self.load_memory_node(state)
+            state.update(memory_update)
+            
+            retrieve_update = await self.retrieve_node(state)
+            state.update(retrieve_update)
 
-    async def build_graph(self,state:FinanceAgentState):
-        checkpointer = await get_checkpointer()
+            generate_update = await self.generate_node(state)
+            state.update(generate_update)
+
+            memory_save_update = await self.save_memory_node(state)
+            state.update(memory_save_update)
+            logger.info(f"SummaryAgent completed workflow for session {state['session_id']}")
         
-        graph = StateGraph(state)
+            return {"answer":state.get("answer"),
+                    "documents":state.get("documents"),
+                    "structured_responses":state.get("structured_responses"),
+                    "messages":state.get("messages"),
+                    "route":"summary"}
         
-        graph.add_node("load_memory",self.load_memory_node)
-        graph.add_node("retrieve",self.retrieve_node)
-        graph.add_node("generate",self.generate_node)
-        graph.add_node("save_memory",self.save_memory_node)
+        except Exception as e:
+            raise AgentError(f"SummaryAgent execution failed",detail=str(e))
 
-        graph.add_edge(START,"load_memory")
-        graph.add_edge("load_memory","retrieve")
-        graph.add_edge("retrieve","generate")
-        graph.add_edge("generate","save_memory")
-        graph.add_edge("save_memory",END)
+    async def stream(self,state: FinanceAgentState):
+        try:
+            memory_update = await self.load_memory_node(state)
+            state.update(memory_update)
 
-        return graph.compile(checkpointer=checkpointer)
+            retrieve_update = await self.retrieve_node(state)
+            state.update(retrieve_update)
+
+            docs = state.get("documents",[])
+            memory = state.get("long_term_summary","")
+
+            context = self._format_docs(docs)
+
+            prompt = ChatPromptTemplate.from_messages([
+                ("system",SUMMARY_SYSTEM_PROMPT),
+                (
+                    "human",
+                    """
+                    LONG TERM MEMORY: {memory}
+                    CONTEXT: {context}
+                    QUESTION: {question}    
+                    """
+                )
+
+            ])
+
+            chain = prompt | self.llm 
+
+            async for chunk in chain.astream({
+            "memory":memory,
+            "context":context,
+            "question":state["question"]}):
+                
+                yield chunk.content
+
+        except Exception as e:
+            raise AgentError("SummaryAgent streaming response failed",detail=str(e))
