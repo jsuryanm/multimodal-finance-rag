@@ -39,7 +39,7 @@ class LongTermMemory:
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""
-                CREATE TABLE IF NOT EXISTS converation_memory(
+                CREATE TABLE IF NOT EXISTS conversation_memory(
                     
                         session_id TEXT PRIMARY KEY,
                         summary    TEXT NOT NULL DEFAULT '',

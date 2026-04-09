@@ -2,6 +2,7 @@ from __future__ import annotations
 import re
 import asyncio
 import uuid 
+from pathlib import Path
 
 from langchain_core.messages import AIMessage,HumanMessage,SystemMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -177,15 +178,14 @@ class OrchestratorAgent:
             if state.get("long_term_memory"):
                 system_content += f"\nPrevious conversation context:\n{state['long_term_summary']}"
 
-            messages = [SystemMessage(content=system_content,
-                                      *state["messages"])]
+            messages = [SystemMessage(content=system_content) + list(state["messages"])]
             
             decision: RouterDecision = await structured_llm.ainvoke(messages)
             logger.info(f"Route: '{decision.route}' | Reason: {decision.reasoning}")
             return {"route":decision.route}
         
         except Exception as e:
-            raise OrchestratorAgent("Router LLM call failed",detail=str(e))
+            raise OrchestratorError("Router LLM call failed",detail=str(e))
     
     async def _summary_node(self,state: FinanceAgentState) -> dict:
         """Delegate to SummaryAgent"""
@@ -386,7 +386,7 @@ async def get_orchestrator() -> OrchestratorAgent:
     global _orchestrator
     if _orchestrator is None:
         _orchestrator = OrchestratorAgent()
-        await _orchestrator.build()
+        await _orchestrator.build_graph()
     return _orchestrator
 
 if __name__ == "__main__":
@@ -394,8 +394,7 @@ if __name__ == "__main__":
 
     async def main():
         try:
-            print("\nStarting Orchestrator test...\n")
-
+            logger.info("Testing orchestrator agent")
             # Create orchestrator
             orchestrator = OrchestratorAgent()
 
