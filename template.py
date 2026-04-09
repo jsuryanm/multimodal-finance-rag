@@ -41,6 +41,8 @@ list_of_files = [
     "backend/app.py",
     "frontend/__init__.py",
     "frontend/app.py",
+    "evals/__init__.py",
+    "evals/rag_evaluator.py",
     "requirements.txt",
     ".env",]
 
