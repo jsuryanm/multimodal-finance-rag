@@ -1,5 +1,8 @@
 from __future__ import annotations
 import re
+import asyncio
+import uuid 
+
 from langchain_core.messages import AIMessage,HumanMessage,SystemMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.graph import StateGraph,START,END
@@ -59,10 +62,8 @@ class OrchestratorAgent:
             }
         })
 
-        await self._mcp_client.__aenter__() 
-        # aenter starts subprocess and establishes stdio connection
 
-        tools_list = self._mcp_client.get_tools()
+        tools_list = await self._mcp_client.get_tools()
         self._mcp_tools = {tool.name:tool for tool in tools_list}
 
         logger.info(f"MCP server connected, Tools loaded: {list(self._mcp_tools.keys())}")
@@ -280,8 +281,10 @@ class OrchestratorAgent:
         Call once at application startup via get_orchestrator().
         """
         await self._connect_mcp()
+
+        await self.long_term_memory.setup()
         
-        checkpointer = await get_checkpointer()
+        self._checkpointer_cm,self.checkpointer = await get_checkpointer()
         graph = StateGraph(FinanceAgentState)
 
         graph.add_node("load_memory",self._load_memory_node)
@@ -303,11 +306,11 @@ class OrchestratorAgent:
                                         "stock_price":"stock_price"
                                     })
         
-        for agent_node in ["summary","chart","comparsion","stock_price"]:
+        for agent_node in ["summary","chart","comparision","stock_price"]:
             graph.add_edge(agent_node,"save_memory")
         
         graph.add_edge("save_memory",END)
-        self._app = graph.compile(checkpointer=checkpointer)
+        self._app = graph.compile(checkpointer=self.checkpointer)
         logger.info("OrchestratorAgent graph compiled successfully")
     
     async def run(self,
@@ -385,3 +388,46 @@ async def get_orchestrator() -> OrchestratorAgent:
         _orchestrator = OrchestratorAgent()
         await _orchestrator.build()
     return _orchestrator
+
+if __name__ == "__main__":
+   
+
+    async def main():
+        try:
+            print("\nStarting Orchestrator test...\n")
+
+            # Create orchestrator
+            orchestrator = OrchestratorAgent()
+
+            # Build graph + connect MCP
+            await orchestrator.build_graph()
+
+            # Use an existing session that already has FAISS index
+            session_id = "test_session"   # change if needed
+
+            # Test questions (try different routes)
+            questions = [
+                "What is the revenue?",                     # summary
+                "Describe charts on page 5",                # chart
+                "Compare revenue of both companies",        # comparison
+                "What is DBS stock price?"                  # stock price
+            ]
+
+            for q in questions:
+                print(f"\nQuestion: {q}")
+
+                result = await orchestrator.run(
+                    question=q,
+                    session_id=session_id,
+                    session_id_b=None,
+                    page_number=5
+                )
+
+                print("Route:", result["route"])
+                print("Answer:", result["answer"])
+                print("-" * 50)
+
+        except Exception as e:
+            print("Test failed:", str(e))
+
+    asyncio.run(main())

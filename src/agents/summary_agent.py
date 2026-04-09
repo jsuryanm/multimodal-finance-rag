@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 
 from langchain_core.messages import AIMessage,HumanMessage
 from langchain_core.output_parsers import JsonOutputParser
@@ -45,7 +46,7 @@ class SummaryAgent:
         store = VectorStore(session_id=session_id)
         retriever = store.get_retriever(search_type="mmr",k=5)
 
-        docs = await retriever.ainvoke(question)
+        docs = await asyncio.to_thread(retriever.invoke,question)
         logger.info(f"Retrieved {len(docs)} chunks for session {session_id}")
         return {"documents":docs}
     

@@ -35,6 +35,8 @@ class LongTermMemory:
         self.db_path = settings.SQLITE_MEMORY_DB
 
     async def setup(self) -> None:
+        self.db_path.parent.mkdir(parents=True,exist_ok=True)
+
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS converation_memory(
