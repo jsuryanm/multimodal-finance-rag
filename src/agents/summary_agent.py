@@ -134,8 +134,6 @@ class SummaryAgent:
             generate_update = await self.generate_node(state)
             state.update(generate_update)
 
-            memory_save_update = await self.save_memory_node(state)
-            state.update(memory_save_update)
             logger.info(f"SummaryAgent completed workflow for session {state['session_id']}")
         
             return {"answer":state.get("answer"),

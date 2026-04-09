@@ -209,3 +209,4 @@ __marimo__/
 *.pdf
 data
 faiss_index
+.claude

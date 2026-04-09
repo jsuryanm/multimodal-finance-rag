@@ -1,8 +1,8 @@
 from __future__ import annotations
 import re
 import asyncio
-import uuid 
-from pathlib import Path
+import json
+import uuid
 
 from langchain_core.messages import AIMessage,HumanMessage,SystemMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -161,18 +161,19 @@ class OrchestratorAgent:
             structured_llm = self.llm.with_structured_output(RouterDecision)
             system_content = (
                 "You are a financial query classifier. "
-                "Classify the user's question into exactly one route:\n\n"
-                "- summary: general financial questions (revenue, profit, EPS, risks, trends)\n"
-                "- chart: mentions page, graph, chart, table, figure, or visual\n"
-                "- comparison: asks to compare two companies (vs, versus, compare)\n"
-                "- stock_price: asks about current/live stock price or a ticker symbol\n"
+                "Classify the user's LATEST question into exactly one route.\n\n"
+                "Routes (use exact spelling):\n"
+                "- summary: general financial questions about metrics (revenue, profit, EPS, risks, trends)\n"
+                "- chart: user mentions page, graph, chart, table, figure, or any visual element\n"
+                "- comparision: user asks to compare two companies (keywords: compare, versus, vs, both companies)\n"
+                "- stock_price: user asks about current or live stock price, or mentions a ticker symbol\n\n"
+                "Priority rule: stock_price and comparision ALWAYS take precedence over summary "
+                "even when financial metrics like revenue are also mentioned.\n"
             )
 
-            # Bug 2 fix: correct state key is "long_term_summary"
             if state.get("long_term_summary"):
                 system_content += f"\nPrevious conversation context:\n{state['long_term_summary']}"
 
-            # Bug 1 fix: wrap SystemMessage in a list before concatenating
             messages = [SystemMessage(content=system_content)] + list(state["messages"])
 
             decision: RouterDecision = await structured_llm.ainvoke(messages)
@@ -217,7 +218,24 @@ class OrchestratorAgent:
                     "route":"stock_price",
                     "messages":[AIMessage(content=answer)]}
         
-        result = await stock_tool.ainvoke({"ticker":ticker})
+        raw = await stock_tool.ainvoke({"ticker":ticker})
+
+        # langchain_mcp_adapters returns a list of TextContent objects;
+        # extract the JSON text and parse it into a dict
+        if isinstance(raw, list):
+            try:
+                text = raw[0].text if hasattr(raw[0], "text") else raw[0].get("text", "{}")
+                result = json.loads(text)
+            except Exception as parse_err:
+                result = {"error": f"Could not parse MCP response: {parse_err}"}
+        elif isinstance(raw, str):
+            try:
+                result = json.loads(raw)
+            except json.JSONDecodeError:
+                result = {"error": raw}
+        else:
+            result = raw  # already a dict
+
         answer = self._format_stock_response(result)
         logger.info(f"Stock price fetched for {ticker}")
 
@@ -351,14 +369,14 @@ class OrchestratorAgent:
             await self.build_graph()
         
         config = {"configurable":{"thread_id":thread_id or session_id}}
-        inital_state = {"messages":[HumanMessage(content=question)],
+        initial_state = {"messages":[HumanMessage(content=question)],
                         "session_id":session_id,
                         "session_id_b":session_id_b,
                         "question":question,
                         "page_number":page_number}
         
         async for event in self._app.astream_events(
-            inital_state,config=config,version="v2"):
+            initial_state,config=config,version="v2"):
             
             if event.get("event") != "on_chat_model_stream":
                 continue
@@ -409,19 +427,28 @@ if __name__ == "__main__":
 
             for q in questions:
                 print(f"\nQuestion: {q}")
+                try:
+                    result = await orchestrator.run(
+                        question=q,
+                        session_id=session_id,
+                        session_id_b=None,
+                        page_number=5,
+                        thread_id=str(uuid.uuid4())  # fresh thread per question to avoid history bleed
+                    )
 
-                result = await orchestrator.run(
-                    question=q,
-                    session_id=session_id,
-                    session_id_b=None,
-                    page_number=5
-                )
-
-                print("Route:", result["route"])
-                print("Answer:", result["answer"])
+                    print("Route:", result["route"])
+                    print("Answer:", result["answer"])
+                except Exception as e:
+                    detail = getattr(e, "detail", None)
+                    print("FAILED:", str(e))
+                    if detail:
+                        print("Detail:", detail)
                 print("-" * 50)
 
         except Exception as e:
-            print("Test failed:", str(e))
+            detail = getattr(e, "detail", None)
+            print("Test setup failed:", str(e))
+            if detail:
+                print("Detail:", detail)
 
     asyncio.run(main())
