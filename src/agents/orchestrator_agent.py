@@ -69,34 +69,30 @@ class OrchestratorAgent:
 
         logger.info(f"MCP server connected, Tools loaded: {list(self._mcp_tools.keys())}")
 
-    def _extract_ticker(self,question: str) -> str:
+    def _extract_ticker(self, question: str) -> str:
         """
-        Extract a stock ticker from the user's question using simple rules.
-
+        Extract a stock ticker from the user's question.
         Priority:
         1. Explicit SGX ticker with .SI suffix (e.g., D05.SI)
-        2. Known company name (e.g., "dbs" → D05.SI)
-        3. All-caps 2-5 letter word (e.g., AAPL)
-        4. Default to DBS (D05.SI) as fallback
+        2. Known company name mapping (e.g., "dbs" → D05.SI)
+        3. All-caps 2–5 letter word (e.g., AAPL)
+        4. Default fallback to DBS (D05.SI)
         """
-        si_match = re.search(r"\b[A-Z0-9]{2,4}\.SI\b",question,re.IGNORECASE)
-        # \b word boundary (start or end of the word)
-        # match [A-Z0-9] upper case leters and numbers 
-        # {2,4} match between characters and ends with Literal .SI
-
+        # Bug 3 fix: use group(0) — no capture group in regex
+        si_match = re.search(r"\b[A-Z0-9]{2,4}\.SI\b", question, re.IGNORECASE)
         if si_match:
-            # retrieve the part of the text that matched regex (returns 1st group)
-            return si_match.group(1).upper()
-        
-        question_lower = question.lower()
-        for company_name,ticker in self.KNOWN_TICKERS.items():
-            if company_name in question_lower:
-                return ticker 
-            
-        NOT_TICKERS = {"THE", "AND", "FOR", "ARE", "DID", "CAN", "NOT", "GET",
-                       "ITS", "WAS", "HAS", "HAD", "WHAT", "WHEN", "HOW"}
-        upper_matches = re.findall(r"\b[A-Z]{2,5}\b",question)
+            return si_match.group(0).upper()
 
+        question_lower = question.lower()
+        for company_name, ticker in self.KNOWN_TICKERS.items():
+            if company_name in question_lower:
+                return ticker
+
+        NOT_TICKERS = {
+            "THE", "AND", "FOR", "ARE", "DID", "CAN", "NOT", "GET",
+            "ITS", "WAS", "HAS", "HAD", "WHAT", "WHEN", "HOW"
+        }
+        upper_matches = re.findall(r"\b[A-Z]{2,5}\b", question)
         for word in upper_matches:
             if word not in NOT_TICKERS:
                 return word
@@ -104,22 +100,22 @@ class OrchestratorAgent:
         logger.warning(f"Could not extract ticker from '{question}'. Defaulting to D05.SI")
         return "D05.SI"
 
-    def _format_stock_response(self,result: dict) -> str:
+    def _format_stock_response(self, result: dict) -> str:
         """
         Format the dict returned by the MCP get_stock_price tool
-        into a readable string.
+        into a readable multi-line string.
         """
         if "error" in result:
             return f"Could not fetch stock price: {result['error']}"
-        
-        currency = result.get("currency","SGD")
-        price = result.get("price",0)
+
+        currency = result.get("currency", "SGD")
+        price = result.get("price", 0)
 
         change = result.get("change_percent")
-        change_str = f"({change:+.2f}%)" if change is not None else ""
+        change_str = f" ({change:+.2f}%)" if change is not None else ""
 
         lines = [
-            f"{result.get('company_name', result.get('ticker', ''))}",
+            f"{result.get('company', result.get('ticker', ''))}",
             f"Price: {currency} {price:.2f}{change_str}",
         ]
 
@@ -135,9 +131,12 @@ class OrchestratorAgent:
             lines.append(f"Dividend Yield: {result['dividend_yield'] * 100:.2f}%")
 
         if result.get("week_52_high") and result.get("week_52_low"):
-            lines.append(f"52-Week Range: {result['week_52_low']:.2f} – {result['week_52_high']:.2f}")
-        
-        return lines 
+            lines.append(
+                f"52-Week Range: {result['week_52_low']:.2f} – {result['week_52_high']:.2f}"
+            )
+
+        # Bug 4 fix: join list into a string before returning
+        return "\n".join(lines)
     
     async def _load_memory_node(self,state: FinanceAgentState) -> dict:
         """
@@ -154,15 +153,9 @@ class OrchestratorAgent:
 
         return {"long_term_summary":summary or ""}
     
-    async def _route_node(self,state: FinanceAgentState) -> dict:
+    async def _route_node(self, state: FinanceAgentState) -> dict:
         """
         Use the LLM with structured output to classify the user's question.
-
-        Routes:
-        - summary:     general financial questions → RAG + FAISS
-        - chart:       mentions page/graph/chart/table/figure → vision LLM
-        - comparison:  compare, versus, vs → runs RAG on two documents
-        - stock_price: live price/ticker question → MCP get_stock_price tool
         """
         try:
             structured_llm = self.llm.with_structured_output(RouterDecision)
@@ -175,17 +168,19 @@ class OrchestratorAgent:
                 "- stock_price: asks about current/live stock price or a ticker symbol\n"
             )
 
-            if state.get("long_term_memory"):
+            # Bug 2 fix: correct state key is "long_term_summary"
+            if state.get("long_term_summary"):
                 system_content += f"\nPrevious conversation context:\n{state['long_term_summary']}"
 
-            messages = [SystemMessage(content=system_content) + list(state["messages"])]
-            
+            # Bug 1 fix: wrap SystemMessage in a list before concatenating
+            messages = [SystemMessage(content=system_content)] + list(state["messages"])
+
             decision: RouterDecision = await structured_llm.ainvoke(messages)
             logger.info(f"Route: '{decision.route}' | Reason: {decision.reasoning}")
-            return {"route":decision.route}
-        
+            return {"route": decision.route}
+
         except Exception as e:
-            raise OrchestratorError("Router LLM call failed",detail=str(e))
+            raise OrchestratorError("Router LLM call failed", detail=str(e))
     
     async def _summary_node(self,state: FinanceAgentState) -> dict:
         """Delegate to SummaryAgent"""
