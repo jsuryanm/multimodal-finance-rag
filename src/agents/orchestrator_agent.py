@@ -402,53 +402,53 @@ async def get_orchestrator() -> OrchestratorAgent:
         await _orchestrator.build_graph()
     return _orchestrator
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
    
 
-    async def main():
-        try:
-            logger.info("Testing orchestrator agent")
-            # Create orchestrator
-            orchestrator = OrchestratorAgent()
+#     async def main():
+#         try:
+#             logger.info("Testing orchestrator agent")
+#             # Create orchestrator
+#             orchestrator = OrchestratorAgent()
 
-            # Build graph + connect MCP
-            await orchestrator.build_graph()
+#             # Build graph + connect MCP
+#             await orchestrator.build_graph()
 
-            # Use an existing session that already has FAISS index
-            session_id = "test_session"   # change if needed
+#             # Use an existing session that already has FAISS index
+#             session_id = "test_session"   # change if needed
 
-            # Test questions (try different routes)
-            questions = [
-                "What is the revenue?",                     # summary
-                "Describe charts on page 5",                # chart
-                "Compare revenue of both companies",        # comparison
-                "What is DBS stock price?"                  # stock price
-            ]
+#             # Test questions (try different routes)
+#             questions = [
+#                 "What is the revenue?",                     # summary
+#                 "Describe charts on page 5",                # chart
+#                 "Compare revenue of both companies",        # comparison
+#                 "What is DBS stock price?"                  # stock price
+#             ]
 
-            for q in questions:
-                print(f"\nQuestion: {q}")
-                try:
-                    result = await orchestrator.run(
-                        question=q,
-                        session_id=session_id,
-                        session_id_b=None,
-                        page_number=5,
-                        thread_id=str(uuid.uuid4())  # fresh thread per question to avoid history bleed
-                    )
+#             for q in questions:
+#                 print(f"\nQuestion: {q}")
+#                 try:
+#                     result = await orchestrator.run(
+#                         question=q,
+#                         session_id=session_id,
+#                         session_id_b=None,
+#                         page_number=5,
+#                         thread_id=str(uuid.uuid4())  # fresh thread per question to avoid history bleed
+#                     )
 
-                    print("Route:", result["route"])
-                    print("Answer:", result["answer"])
-                except Exception as e:
-                    detail = getattr(e, "detail", None)
-                    print("FAILED:", str(e))
-                    if detail:
-                        print("Detail:", detail)
-                print("-" * 50)
+#                     print("Route:", result["route"])
+#                     print("Answer:", result["answer"])
+#                 except Exception as e:
+#                     detail = getattr(e, "detail", None)
+#                     print("FAILED:", str(e))
+#                     if detail:
+#                         print("Detail:", detail)
+#                 print("-" * 50)
 
-        except Exception as e:
-            detail = getattr(e, "detail", None)
-            print("Test setup failed:", str(e))
-            if detail:
-                print("Detail:", detail)
+#         except Exception as e:
+#             detail = getattr(e, "detail", None)
+#             print("Test setup failed:", str(e))
+#             if detail:
+#                 print("Detail:", detail)
 
-    asyncio.run(main())
+#     asyncio.run(main())
