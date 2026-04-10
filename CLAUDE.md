@@ -40,13 +40,14 @@ OrchestratorAgent (LangGraph StateGraph)
 | `src/agents/chart_agent.py` | Vision LLM pipeline: load page image → analyze charts/tables |
 | `src/agents/comparision_agent.py` | Dual-document RAG for company comparison |
 | `src/core/pdf_processor.py` | PDF → text chunks + page PNG images |
+| `src/core/embeddings.py` | `QwenVLEmbeddings` + `get_qwen_embeddings()` singleton (pre-loaded at startup) |
 | `src/core/vector_store.py` | ChromaDB collection build/load/retrieve (one collection per session) |
 | `src/memory/long_term.py` | SQLite-backed long-term memory (per session Q&A summaries) |
 | `src/memory/checkpoint.py` | LangGraph SQLite checkpointer (full graph state) |
 | `src/mcp_server/server.py` | FastMCP server: `get_stock_price` + `search_financial_news` |
 | `src/models/schemas.py` | Pydantic schemas: `RouterDecision`, `FinancialSummary`, `ChartAnalysis`, `ComparisionSummary` |
 | `src/settings/config.py` | Pydantic settings from `.env`; `get_llm()`, `get_vision_llm()` |
-| `backend/app.py` | FastAPI app (in progress — currently empty) |
+| `backend/app.py` | FastAPI: `/health`, `/upload` (PDF→ChromaDB index), `/chat/stream` (SSE), exception handlers |
 
 ---
 
@@ -75,6 +76,9 @@ uv run python -m src.agents.orchestrator_agent
 
 # Test PDF processor standalone
 uv run python -m src.core.pdf_processor
+
+# Run FastAPI backend
+uv run uvicorn backend.app:app --reload
 ```
 
 ---
@@ -84,11 +88,14 @@ uv run python -m src.core.pdf_processor
 ```
 OPENAI_API_KEY=
 GROQ_API_KEY=
-JINA_API_KEY=          # Required for embeddings
 LANGSMITH_API_KEY=
 TAVILY_API_KEY=        # Optional — for search_financial_news MCP tool
 
 LLM_PROVIDER=openai    # or "groq"
+
+# Embeddings — local model, no API key required
+EMBEDDING_MODEL=Qwen/Qwen3-VL-Embedding-2B
+EMBEDDING_DEVICE=auto  # auto → CUDA → MPS → CPU
 ```
 
 ---
@@ -115,4 +122,6 @@ Set `LLM_PROVIDER` in `.env`:
 
 5. **MCP client:** `MultiServerMCPClient` is instantiated without `async with`. The tools returned by `get_tools()` maintain their connection. Do not wrap in `async with` unless the library version requires it.
 
-6. **`MAX_TOKENS=500`** is intentionally low. Increase in `.env` if answers are truncated.
+6. **`MAX_TOKENS=2000`** — default is 2000; comparison responses require this much for full JSON output. Increase in `.env` only if answers are still truncated.
+
+7. **Embedding model cold start:** FastAPI lifespan pre-loads Qwen3-VL via `asyncio.to_thread` (~30s on CPU, faster on GPU). The first upload will not block if the lifespan warm-up has completed.

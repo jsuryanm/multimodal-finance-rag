@@ -7,6 +7,7 @@ class UploadResponse(BaseModel):
     filename: str
     pages: int
     chunks: int
+    chart_pages: list[int]  # 1-indexed page numbers detected as containing charts/tables
 
 
 class ChatRequest(BaseModel):

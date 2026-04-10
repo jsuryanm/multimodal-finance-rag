@@ -8,6 +8,7 @@ dependencies = [
     "aiosqlite>=0.22.1",
     "chromadb>=0.6.0",
     "deepeval>=3.9.6",
+    "faiss-cpu>=1.13.2",
     "fastapi>=0.135.3",
     "huggingface-hub[hf-xet]>=1.9.1",
     "langchain>=1.2.15",
@@ -45,6 +46,7 @@ dependencies = [
 where = ["."]
 include = ["src*"]
 
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 
@@ -60,3 +62,4 @@ explicit = true
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }

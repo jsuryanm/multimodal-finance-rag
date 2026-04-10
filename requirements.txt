@@ -7,6 +7,7 @@ langchain-text-splitters
 langchain-huggingface
 langchain-mcp-adapters
 langchain-tavily
+langchain-chroma 
 
 langgraph
 langgraph-checkpoint-sqlite
@@ -15,8 +16,7 @@ langsmith
 
 deepeval
 
-faiss-cpu
-
+chromadb
 mcp[cli]
 
 tavily-python

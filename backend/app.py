@@ -7,8 +7,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 
-from backend.models.schemas import UploadResponse, ChatRequest
+from backend.models.api_schemas import UploadResponse, ChatRequest
 from src.agents.orchestrator_agent import get_orchestrator
+from src.core.embeddings import get_qwen_embeddings
 from src.core.pdf_processor import PDFProcessor
 from src.core.vector_store import VectorStore
 from src.exceptions.custom_exceptions import (
@@ -23,6 +24,11 @@ async def lifespan(app: FastAPI):
     logger.info("Warming up orchestrator…")
     await get_orchestrator()
     logger.info("Orchestrator ready.")
+    # Load the embedding model now so the first upload doesn't block mid-request.
+    # asyncio.to_thread keeps the event loop responsive during the ~30s load time.
+    logger.info("Loading embedding model…")
+    await asyncio.to_thread(get_qwen_embeddings)
+    logger.info("Embedding model ready.")
     yield
 
 
@@ -42,21 +48,33 @@ async def upload(file: UploadFile = File(...)):
     content = await file.read()
     session_id = str(uuid.uuid4())
 
-    processor = PDFProcessor(session_id=session_id)
-    pdf_path = await asyncio.to_thread(processor.save_pdf, file.filename, content)
-    chunks = await asyncio.to_thread(processor.extract_documents, pdf_path)
-    images = await asyncio.to_thread(processor.extract_page_images, pdf_path)
+    try:
+        processor = PDFProcessor(session_id=session_id)
+        pdf_path = await asyncio.to_thread(processor.save_pdf, file.filename, content)
+        chunks = await asyncio.to_thread(processor.extract_documents, pdf_path)
+        images = await asyncio.to_thread(processor.extract_page_images, pdf_path)
+        chart_pages = await asyncio.to_thread(processor.detect_chart_pages, pdf_path)
 
-    store = VectorStore(session_id=session_id)
-    await asyncio.to_thread(store.build_index, chunks)
+        store = VectorStore(session_id=session_id)
+        await asyncio.to_thread(store.build_index, chunks)
 
-    logger.info(f"Uploaded {file.filename} → session {session_id} ({len(chunks)} chunks, {len(images)} pages)")
+    except FinDocBaseException:
+        raise  # let the registered exception handler format it
+    except Exception as e:
+        logger.exception(f"Upload failed for {file.filename}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    logger.info(
+        f"Uploaded {file.filename} → session {session_id} "
+        f"({len(chunks)} chunks, {len(images)} pages, {len(chart_pages)} chart pages)"
+    )
 
     return UploadResponse(
         session_id=session_id,
         filename=file.filename,
         pages=len(images),
         chunks=len(chunks),
+        chart_pages=chart_pages,
     )
 
 

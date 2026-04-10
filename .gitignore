@@ -214,3 +214,4 @@ faiss_index
 .superpowers
 docs
 docs/*
+chroma_index 
