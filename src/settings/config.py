@@ -12,10 +12,9 @@ class Settings(BaseSettings):
                                       case_sensitive=False,
                                       extra="ignore")
     
-    # API keys for llms and zina embeddings 
+    # API keys
     OPENAI_API_KEY: str = Field(default="")
     GROQ_API_KEY: str = Field(default="")
-    JINA_API_KEY: str = Field(default="")
 
     # LangSmith
     LANGSMITH_API_KEY: str = Field(default="")
@@ -34,8 +33,11 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: str = Field(default="")
 
 
-    # Embeddings model 
-    EMBEDDING_MODEL: str = "jina-embeddings-v3"
+    # Embeddings — local Qwen3-VL model (no API key required)
+    EMBEDDING_MODEL: str = "Qwen/Qwen3-VL-Embedding-2B"
+    # Device for the local embedding model. "auto" detects CUDA → MPS → CPU at runtime.
+    # Override in .env with EMBEDDING_DEVICE=cuda / cpu / mps
+    EMBEDDING_DEVICE: str = "auto"
 
     # Maximum completion tokens (comparison responses need 2000+ for full JSON)
     MAX_TOKENS: int = 2000
@@ -48,9 +50,13 @@ class Settings(BaseSettings):
     # paths
     DATA_DIR: Path = Path("data")
     FAISS_DIR: Path = Path("faiss_index")
+    CHROMA_DIR: Path = Path("chroma_index")
     SQLITE_MEMORY_DB: Path = Path("data/memory.db")
     SQLITE_CHECKPOINT: Path = Path("data/checkpoints.db")
 
+
+    # Timeout in seconds for LLM / agent node calls
+    LLM_TIMEOUT: int = 90
 
     # logging
     LOG_LEVEL: str = "INFO"
