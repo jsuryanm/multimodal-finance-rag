@@ -59,7 +59,7 @@ class VectorStore:
                 if attempt == max_attempts:
                     raise VectorStoreError(
                         "Failed to build ChromaDB index", detail=str(e)
-                    )
+                    ) from e
                 wait = 2 ** attempt
                 logger.warning(
                     f"Embedding attempt {attempt}/{max_attempts} failed: {e}. "
@@ -88,7 +88,7 @@ class VectorStore:
             logger.info(f"Loaded ChromaDB index from {self.index_dir}")
 
         except Exception as e:
-            raise VectorStoreError("Failed to load ChromaDB index", detail=str(e))
+            raise VectorStoreError("Failed to load ChromaDB index", detail=str(e)) from e
 
     def get_retriever(
         self,
