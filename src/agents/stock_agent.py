@@ -30,13 +30,18 @@ class StockAgent:
             ),
         )
 
+    # src/agents/stock_agent.py
+
     async def run(self, state: FinanceAgentState) -> dict:
         question = state["question"]
         try:
             result = await self.agent.ainvoke({
                 "messages": [{"role": "user", "content": question}]
             })
-            answer = result["messages"][-1]["content"]
+            # AIMessage is an object — use .content, not ["content"]
+            last_message = result["messages"][-1]
+            answer = last_message.content if hasattr(last_message, "content") else str(last_message)
+            
             logger.info("StockAgent completed")
             return {
                 "answer": answer,

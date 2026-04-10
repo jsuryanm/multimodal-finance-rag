@@ -32,7 +32,7 @@ class PDFProcessor:
     def _build_converter(self) -> DocumentConverter:
         opts = PdfPipelineOptions()
         opts.do_table_structure = True
-        opts.table_structure_options.mode = TableFormerMode.ACCURATE
+        opts.table_structure_options.mode = TableFormerMode.FAST
         opts.do_ocr = getattr(settings, "PDF_OCR_ENABLED", False)
         if opts.do_ocr:
             opts.ocr_options = EasyOcrOptions(lang=["en"])
@@ -57,7 +57,7 @@ class PDFProcessor:
         self._docling_doc = doc  # cache for detect_chart_pages
 
         chunker = HybridChunker(
-            tokenizer="sentence-transformers/all-MiniLM-L6-v2",
+            tokenizer="Qwen/Qwen3-VL-Embedding-2B",
             max_tokens=settings.CHUNK_SIZE,
             merge_peers=True,
         )
