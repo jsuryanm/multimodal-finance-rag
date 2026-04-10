@@ -42,7 +42,7 @@ Respond with a single JSON object matching this schema — no markdown fences, n
 no trailing text. 
 "Response must start with {{ and end with }}."
 
-```
+
 {{
   "revenue": string | null,
   "net_profit": string | null,
@@ -56,7 +56,7 @@ no trailing text.
   "key_risks": string | null,
   "summary": string          // REQUIRED
 }}
-```"""
+"""
 
 
 SUMMARY_PROMPT = ChatPromptTemplate.from_messages([

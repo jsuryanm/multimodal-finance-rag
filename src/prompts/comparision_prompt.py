@@ -45,7 +45,7 @@ stronger based solely on the data — acknowledge data gaps honestly
 Respond with a single JSON object — no markdown fences, no backticks, no preamble. \
 "Response must start with {{ and end with }}."
 
-```
+
 {{
   "company_a_name": string,
   "company_b_name": string,
@@ -63,7 +63,7 @@ Respond with a single JSON object — no markdown fences, no backticks, no pream
   "growth_comparison": string,
   "final_verdict": string
 }}
-```"""
+"""
 
 
 COMPARE_PROMPT = ChatPromptTemplate.from_messages([

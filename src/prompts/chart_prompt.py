@@ -38,7 +38,7 @@ uncertainty with "(approximate)" rather than guessing.
 ## Output format
 Respond with a single JSON object — no markdown fences, no backticks, no preamble. \
 "Response must start with {{ and end with }}."
-```
+
 {
   "visual_type": string,
   "title": string | null,
@@ -48,7 +48,7 @@ Respond with a single JSON object — no markdown fences, no backticks, no pream
   "key_insight": string,
   "explanation": string
 }
-```"""
+"""
 
 
 CHART_PROMPT = ChatPromptTemplate.from_messages([
