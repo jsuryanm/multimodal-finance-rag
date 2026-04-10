@@ -43,7 +43,7 @@ stronger based solely on the data — acknowledge data gaps honestly
 
 ## Output format
 Respond with a single JSON object — no markdown fences, no backticks, no preamble. \
-The response MUST start with `{` and end with `}`.
+The response MUST start with `{{` and end with `}}`.
 
 ```
 {

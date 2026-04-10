@@ -39,7 +39,7 @@ The conversation history may contain prior Q&A. Use it to resolve pronouns ("it"
 
 ## Output format
 Respond with a single JSON object matching this schema — no markdown fences, no preamble, \
-no trailing text. The response MUST start with `{` and end with `}`.
+no trailing text. The response MUST start with `{{` and end with `}}`.
 
 ```
 {
