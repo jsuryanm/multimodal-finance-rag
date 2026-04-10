@@ -37,8 +37,8 @@ class Settings(BaseSettings):
     # Embeddings model 
     EMBEDDING_MODEL: str = "jina-embeddings-v3"
 
-    # Maximum completion tokens
-    MAX_TOKENS: int = 500
+    # Maximum completion tokens (comparison responses need 2000+ for full JSON)
+    MAX_TOKENS: int = 2000
 
     # RAG dettings 
     CHUNK_SIZE: int = 1000 

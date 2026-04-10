@@ -213,3 +213,4 @@ faiss_index
 .claude.superpowers/
 .superpowers
 docs
+docs/*

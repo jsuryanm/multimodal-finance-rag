@@ -375,13 +375,34 @@ class OrchestratorAgent:
                         "question":question,
                         "page_number":page_number}
         
+        route_emitted = False
         async for event in self._app.astream_events(
-            initial_state,config=config,version="v2"):
-            
-            if event.get("event") != "on_chat_model_stream":
-                continue
-                
+            initial_state, config=config, version="v2"):
+
+            event_type = event.get("event")
             node = event.get("metadata", {}).get("langgraph_node", "")
+
+            # Surface node errors as [ERROR] tokens so the stream never silently empties
+            if event_type == "on_chain_error":
+                if node and node not in ("route", "load_memory", "save_memory"):
+                    error = event.get("data", {}).get("error")
+                    error_msg = str(error) if error else "Unknown agent error"
+                    logger.error(f"Node '{node}' raised: {error_msg}")
+                    yield f"[ERROR] {error_msg}"
+                    return
+
+            # Capture route from the route node's chain-end event and emit first
+            if not route_emitted and event_type == "on_chain_end":
+                if node == "route":
+                    output = event.get("data", {}).get("output", {})
+                    route = output.get("route", "summary") if isinstance(output, dict) else "summary"
+                    yield f"[ROUTE:{route}]"
+                    route_emitted = True
+                    continue
+
+            if event_type != "on_chat_model_stream":
+                continue
+
             if node in ("route", "load_memory", "save_memory"):
                 continue
 
