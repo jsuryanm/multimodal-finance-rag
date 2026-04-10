@@ -42,7 +42,7 @@ Examples: "What was the net profit?", "What are the key risks?", "Summarise the 
 When multiple routes could apply, use this priority: stock_price > comparision > chart > summary
 
 ## Output format
-Return a JSON object with two fields:
+Return a JSON object without markdown and preamble, with two fields:
 - `route`: exactly one of "summary", "chart", "comparision", "stock_price"
 - `reasoning`: one sentence explaining why you chose this route
 """

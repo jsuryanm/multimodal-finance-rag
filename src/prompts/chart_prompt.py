@@ -37,8 +37,7 @@ uncertainty with "(approximate)" rather than guessing.
 
 ## Output format
 Respond with a single JSON object — no markdown fences, no backticks, no preamble. \
-The response MUST start with `{{` and end with `}}`.
-
+"Response must start with {{ and end with }}."
 ```
 {
   "visual_type": string,

@@ -43,26 +43,26 @@ stronger based solely on the data — acknowledge data gaps honestly
 
 ## Output format
 Respond with a single JSON object — no markdown fences, no backticks, no preamble. \
-The response MUST start with `{{` and end with `}}`.
+"Response must start with {{ and end with }}."
 
 ```
-{
+{{
   "company_a_name": string,
   "company_b_name": string,
   "rows": [
-    {
+    {{
       "metric": string,
       "company_a": string,
       "company_b": string,
       "insight": string
-    }
+    }}
   ],
   "revenue_comparision": string,
   "profit_comparison": string,
   "debt_comparison": string,
   "growth_comparison": string,
   "final_verdict": string
-}
+}}
 ```"""
 
 

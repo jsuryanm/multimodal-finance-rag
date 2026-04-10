@@ -39,10 +39,11 @@ The conversation history may contain prior Q&A. Use it to resolve pronouns ("it"
 
 ## Output format
 Respond with a single JSON object matching this schema — no markdown fences, no preamble, \
-no trailing text. The response MUST start with `{{` and end with `}}`.
+no trailing text. 
+"Response must start with {{ and end with }}."
 
 ```
-{
+{{
   "revenue": string | null,
   "net_profit": string | null,
   "operating_profit": string | null,
@@ -54,7 +55,7 @@ no trailing text. The response MUST start with `{{` and end with `}}`.
   "yoy_growth": string | null,
   "key_risks": string | null,
   "summary": string          // REQUIRED
-}
+}}
 ```"""
 
 
