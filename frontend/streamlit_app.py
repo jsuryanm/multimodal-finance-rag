@@ -112,8 +112,16 @@ def _upload_file(file, slot: str):
                     st.session_state.uploaded_filename_b = file.name
                 st.success(f"✓ {file.name} — {data['chunks']} chunks, {data['pages']} pages")
             except requests.exceptions.HTTPError as e:
-                detail = e.response.json().get("detail", str(e))
+                try:
+                    detail = e.response.json().get("detail", str(e))
+                except Exception:
+                    detail = str(e)
                 st.error(f"Upload failed: {detail}")
+            except requests.exceptions.ReadTimeout:
+                st.error(
+                    "Upload timed out — the PDF is large and indexing is still running. "
+                    "Try uploading a smaller file, or wait and refresh the page."
+                )
             except requests.exceptions.ConnectionError:
                 st.error("Cannot reach backend. Is it running?")
 
