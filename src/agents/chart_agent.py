@@ -290,59 +290,56 @@ class ChartAgent:
 
     # ── Vision LLM analysis ──────────────────────────────────────────────────
 
-    async def load_image_node(self, state: FinanceAgentState) -> dict:
-        session_id = state["session_id"]
-        question = state.get("question", "")
+    # ── Vision LLM analysis ──────────────────────────────────────────────────
 
-        # Step 1: Extract intent from the question
-        intent = self.extract_chart_intent(question)
-        logger.info(f"Chart intent: type='{intent.chart_type}', page={intent.explicit_page}")
+    async def analyze_image_node(self, state: FinanceAgentState) -> dict:
+        """Send the page image to the vision LLM and parse a structured ChartAnalysis."""
+        image_b64 = state.get("image_b64")
+        page_number = state.get("page_number", 1)
+        question = state.get("question") or f"Describe charts on page {page_number}"
 
-        # Step 2: Resolve page number with correct priority:
-        #   (a) explicit page in the question ("page 12") — highest priority
-        #   (b) page_number from state (set by frontend) — only if no explicit mention in question
-        #   (c) auto-detect via _find_best_chart_page — fallback
-        
-        if intent.explicit_page:
-            # User said "page 12" or "page199" in their question — trust this above all else
-            page_number = intent.explicit_page
-            logger.info(f"Using explicit page {page_number} from question intent")
+        # Use the intent stored by load_image_node for type-specific prompt injection
+        intent: ChartIntent = state.get("_chart_intent") or self.extract_chart_intent(question)
+        system_prompt = build_chart_prompt(intent.chart_type)
 
-        elif state.get("page_number"):
-            # Frontend passed a specific page (e.g. user clicked a chart page button)
-            page_number = state["page_number"]
-            logger.info(f"Using page {page_number} from request state")
-
-        else:
-            # Neither — auto-detect the best chart page
-            page_number = await self._find_best_chart_page(question, session_id, intent)
-            logger.info(f"Auto-selected page {page_number} for session {session_id}")
-
-        # Step 3: Load the image
-        images_dir = settings.DATA_DIR / session_id / "page_images"
-        image_path = images_dir / f"page_{page_number}.png"
-
-        if not image_path.exists():
-            # Page number may be out of range for this PDF
-            raise AgentError(
-                f"Page image not found: page {page_number}",
-                detail=(
-                    f"Expected path: {image_path}. "
-                    f"This PDF has {len(list(images_dir.glob('page_*.png')))} pages. "
-                    "Check the page number is within range."
+        message = HumanMessage(content=[
+            {
+                "type": "text",
+                "text": (
+                    f"{system_prompt}\n\n"
+                    f"User question: {question}\n\n"
+                    f"This is page {page_number} of an SGX annual report. "
+                    "Describe all financial visuals with investment-grade precision. "
+                    "Respond ONLY with the JSON object — no markdown, no preamble."
                 ),
-            )
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+            },
+        ])
 
-        image_b64 = PDFProcessor.image_to_base64(image_path)
-        logger.info(f"Loaded page {page_number} image for session {session_id}")
+        chain = self.vision_llm | JsonOutputParser()
+        result = await chain.ainvoke([message])
 
+        try:
+            analysis_obj = ChartAnalysis(**result)
+            answer = analysis_obj.explanation or analysis_obj.key_insight or str(result)
+            structured = analysis_obj.model_dump()
+        except Exception as e:
+            logger.warning(f"Could not parse ChartAnalysis: {e}")
+            answer = str(result)
+            structured = {"raw": answer}
+
+        ai_message = AIMessage(content=answer)
+        logger.info(f"Chart analysis complete for page {page_number}")
         return {
-            "image_b64": image_b64,
-            "page_number": page_number,
-            "_chart_intent": intent,
+            "answer": answer,
+            "structured_responses": structured,
+            "messages": [ai_message],
         }
-        # ── run() and stream() (unchanged wiring, updated internals) ─────────────
 
+# ── run() and stream() ────────────────────────────────────────────────────
     async def run(self, state: FinanceAgentState) -> dict:
         try:
             image_update = await self.load_image_node(state)
