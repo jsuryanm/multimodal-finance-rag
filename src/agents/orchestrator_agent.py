@@ -540,6 +540,8 @@ class OrchestratorAgent:
             event_type = event.get("event")
             node = event.get("metadata", {}).get("langgraph_node", "")
 
+            # Events are delivered in node-execution order by astream_events; returning here
+            # stops processing before any downstream node events can arrive.
             # Surface node errors — skip routing/memory/merge nodes
             if event_type == "on_chain_error":
                 if node and node not in ("route", "load_memory", "save_memory", "merge"):
@@ -578,9 +580,6 @@ class OrchestratorAgent:
                         f"**{label_sp}**\n\n{stock_price_text}"
                         f"\n\n---\n\n**{label_su}**\n\n"
                     )
-                    summary_started = True
-
-                if node == "summary":
                     summary_started = True
 
                 chunk = event["data"].get("chunk")
