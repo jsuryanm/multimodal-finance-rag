@@ -37,7 +37,7 @@ class SummaryAgent:
         return {"long_term_summary":summary or "No previous conversation history"}
 
     async def retrieve_node(self,state: FinanceAgentState) -> dict:
-        """Use FAISS vector store to retrieve relevant chunks for the question.
+        """Use ChromaDB vector store to retrieve relevant chunks for the question.
         Uses MMR (Maximal Marginal Relevance) to reduce redundancy in results.
         """
         question = state["question"] or state["messages"][-1].content

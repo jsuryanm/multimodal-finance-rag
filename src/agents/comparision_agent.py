@@ -24,7 +24,7 @@ class ComparsionAgent:
         )
     
     async def retrieve_both_nodes(self,state: FinanceAgentState) -> dict:
-        """Retrieve relevant chunks from both companies FAISS indexes in parallel"""
+        """Retrieve relevant chunks from both companies ChromaDB indexes in parallel"""
         question = state["question"]
         session_id_a = state["session_id"]
         session_id_b = state["session_id_b"]

@@ -12,7 +12,7 @@ class PDFProcessingError(FinDocBaseException):
 
 
 class VectorStoreError(FinDocBaseException):
-    """Raised when FAISS indexing or retrieval fails."""
+    """Raised when ChromaDB indexing or retrieval fails."""
     pass
 
 
