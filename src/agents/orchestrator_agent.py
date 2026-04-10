@@ -1,5 +1,4 @@
 from __future__ import annotations
-import re
 import asyncio
 import json
 import uuid
@@ -12,10 +11,13 @@ from src.agents.state import FinanceAgentState
 from src.agents.summary_agent import SummaryAgent
 from src.agents.chart_agent import ChartAgent
 from src.agents.comparision_agent import ComparsionAgent
+from src.agents.stock_agent  import StockAgent
 
 from src.memory.checkpoint import get_checkpointer
 from src.memory.long_term import get_long_term_memory
+
 from src.models.schemas import RouterDecision
+
 from src.settings.config import get_llm, settings
 from src.logger.custom_logger import logger 
 from src.exceptions.custom_exceptions import OrchestratorError
@@ -46,23 +48,16 @@ class OrchestratorAgent:
           → save_memory    (save Q&A to SQLite for next session)
           → END
     """
-    KNOWN_TICKERS = {
-        "dbs": "D05.SI",
-        "ocbc": "O39.SI",
-        "uob": "U11.SI",
-        "singtel": "Z74.SI",
-        "capitaland": "9CI.SI",
-        "keppel": "BN4.SI",
-        "grab": "GRAB",
-        "sea": "SE",
-    }
 
     def __init__(self):
         self.llm = get_llm()
         self.summary_agent = SummaryAgent()
         self.chart_agent = ChartAgent()
         self.comparision_agent = ComparsionAgent()
+        self.stock_agent = None
+
         self.long_term_memory = get_long_term_memory()
+
 
         self._mcp_client: MultiServerMCPClient | None = None 
         self._mcp_tools: dict = {}
@@ -81,70 +76,9 @@ class OrchestratorAgent:
 
         tools_list = await self._mcp_client.get_tools()
         self._mcp_tools = {tool.name:tool for tool in tools_list}
-
+        self.stock_agent = StockAgent(self._mcp_tools)
         logger.info(f"MCP server connected, Tools loaded: {list(self._mcp_tools.keys())}")
 
-    def _extract_ticker(self, question: str) -> str:
-        """
-        Extract a stock ticker from the user's question.
-        Priority:
-        1. Explicit SGX ticker with .SI suffix (e.g., D05.SI)
-        2. Known company name mapping (e.g., "dbs" → D05.SI)
-        3. All-caps 2–5 letter word (e.g., AAPL)
-        4. Default fallback to DBS (D05.SI)
-        """
-        # Bug 3 fix: use group(0) — no capture group in regex
-        si_match = re.search(r"\b[A-Z0-9]{2,4}\.SI\b", question, re.IGNORECASE)
-        if si_match:
-            return si_match.group(0).upper()
-
-        question_lower = question.lower()
-        for company_name, ticker in self.KNOWN_TICKERS.items():
-            if company_name in question_lower:
-                return ticker
-
-        NOT_TICKERS = {
-            "THE", "AND", "FOR", "ARE", "DID", "CAN", "NOT", "GET",
-            "ITS", "WAS", "HAS", "HAD", "WHAT", "WHEN", "HOW",
-            "WHO", "WHY", "FROM", "WITH", "THAT", "THIS", "WILL",
-            "BEEN", "THEIR", "THEY", "THAN", "MORE", "YEAR", "WHAT",
-            "GIVE", "TELL", "SHOW", "DOES", "INTO", "OVER", "ALSO",
-            "BOTH", "EACH", "MUCH", "SOME", "SUCH", "THEN", "THERE",
-            "EBIT", "EBITDA", "EPS", "ROE", "ROA", "NPV", "IRR", "DCF", "CAGR", "NAV", "NTA", "IPO", "SGX", "YOY", "QOQ", "MOM",
-        }
-        upper_matches = re.findall(r"\b[A-Z]{2,5}\b", question)
-        for word in upper_matches:
-            if word not in NOT_TICKERS:
-                return word
-
-        logger.warning(f"Could not extract ticker from '{question}'. Defaulting to D05.SI")
-        return "D05.SI"
-
-    def _has_explicit_ticker(self, question: str) -> bool:
-        """Return True if the question contains an explicit ticker or known company name.
-
-        Uses the same three-pass logic as _extract_ticker but returns a bool so that
-        DBS (which maps to D05.SI via KNOWN_TICKERS) and the no-match fallback
-        (also D05.SI) can be distinguished.
-        """
-        if re.search(r"\b[A-Z0-9]{2,4}\.SI\b", question, re.IGNORECASE):
-            return True
-        question_lower = question.lower()
-        if any(name in question_lower for name in self.KNOWN_TICKERS):
-            return True
-        NOT_TICKERS = {
-            "THE", "AND", "FOR", "ARE", "DID", "CAN", "NOT", "GET",
-            "ITS", "WAS", "HAS", "HAD", "WHAT", "WHEN", "HOW",
-            "WHO", "WHY", "FROM", "WITH", "THAT", "THIS", "WILL",
-            "BEEN", "THEIR", "THEY", "THAN", "MORE", "YEAR", "WHAT",
-            "GIVE", "TELL", "SHOW", "DOES", "INTO", "OVER", "ALSO",
-            "BOTH", "EACH", "MUCH", "SOME", "SUCH", "THEN", "THERE",
-            "EBIT", "EBITDA", "EPS", "ROE", "ROA", "NPV", "IRR", "DCF", "CAGR", "NAV", "NTA", "IPO", "SGX", "YOY", "QOQ", "MOM",
-        }
-        return any(
-            word not in NOT_TICKERS
-            for word in re.findall(r"\b[A-Z]{2,5}\b", question)
-        )
 
     def _format_stock_response(self, result: dict) -> str:
         """
@@ -287,69 +221,34 @@ class OrchestratorAgent:
             "messages": result.get("messages", []),
         }
 
-    async def _stock_price_node(self,state: FinanceAgentState) -> dict:
+    async def _stock_price_node(self, state: FinanceAgentState) -> dict:
         """
-        Fetch live stock price by calling the MCP server's get_stock_price tool.
-
-        Flow:
-        1. Extract ticker from user's question
-        2. Call MCP tool via .ainvoke() — this goes to the MCP server subprocess
-        3. Format the result into a readable string
+        Delegate stock price handling to StockAgent (LLM + tools).
+        No ticker extraction here.
         """
-        question = state.get("question") or state["messages"][-1].content
-
-        ticker = self._extract_ticker(question)
-        logger.info(f"Stock price lookup for ticker: {ticker}")
-
-        stock_tool = self._mcp_tools.get("get_stock_price")
-
-        if not stock_tool:
-            logger.error("get_stock_price MCP tool not found")
-            answer = "Stock price tool is unavailable. Check MCP server"
-            return {
-                "partial_answers": [{"route": "stock_price", "text": answer}],
-                "active_routes": ["stock_price"],
-                "messages": [AIMessage(content=answer)],
-            }
-        
         try:
-            raw = await asyncio.wait_for(
-                stock_tool.ainvoke({"ticker": ticker}),
+            result = await asyncio.wait_for(
+                self.stock_agent.run(state),
                 timeout=settings.LLM_TIMEOUT,
             )
+
+            return {
+                "partial_answers": [
+                    {"route": "stock_price", "text": result.get("answer", "")}
+                ],
+                "active_routes": ["stock_price"],
+                "messages": result.get("messages", []),
+                "structured_responses": result.get("structured_responses"),
+            }
+
         except asyncio.TimeoutError:
-            answer = f"Stock price lookup timed out after {settings.LLM_TIMEOUT}s"
+            answer = f"StockAgent timed out after {settings.LLM_TIMEOUT}s"
             return {
                 "partial_answers": [{"route": "stock_price", "text": answer}],
                 "active_routes": ["stock_price"],
                 "messages": [AIMessage(content=answer)],
-            }
-
-        # langchain_mcp_adapters returns a list of TextContent objects;
-        # extract the JSON text and parse it into a dict
-        if isinstance(raw, list):
-            try:
-                text = raw[0].text if hasattr(raw[0], "text") else raw[0].get("text", "{}")
-                result = json.loads(text)
-            except Exception as parse_err:
-                result = {"error": f"Could not parse MCP response: {parse_err}"}
-        elif isinstance(raw, str):
-            try:
-                result = json.loads(raw)
-            except json.JSONDecodeError:
-                result = {"error": raw}
-        else:
-            result = raw  # already a dict
-
-        answer = self._format_stock_response(result)
-        logger.info(f"Stock price fetched for {ticker}")
-
-        return {
-            "partial_answers": [{"route": "stock_price", "text": answer}],
-            "active_routes": ["stock_price"],
-            "messages": [AIMessage(content=answer)],
-        }
-    
+            }    
+        
     async def _save_memory_node(self,state: FinanceAgentState) -> dict:
         """
         Append the latest Q&A to long-term memory in SQLite.

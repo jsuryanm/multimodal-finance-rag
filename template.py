@@ -28,6 +28,7 @@ list_of_files = [
     "src/models/schemas.py",
     "src/agents/__init__.py",
     "src/agents/comparision_agent.py",
+    "src/agents/stock_agent.py",
     "src/agents/chart_agent.py",
     "src/agents/orchestrator_agent.py",
     "src/agents/summary_agent.py",
