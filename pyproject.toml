@@ -28,7 +28,6 @@ dependencies = [
     "pydantic-settings>=2.13.1",
     "pymupdf>=1.27.2.2",
     "pypdf>=6.9.2",
-    "unstructured[pdf]>=0.17.0",
     "python-dotenv>=1.2.2",
     "python-multipart>=0.0.24",
     "requests>=2.33.1",
@@ -37,6 +36,7 @@ dependencies = [
     "tavily-python>=0.7.23",
     "torch>=2.7.0",
     "transformers>=5.5.0",
+    "unstructured[pdf]>=0.17.0",
     "uvicorn[standard]>=0.44.0",
     "yfinance>=1.2.1",
 ]
