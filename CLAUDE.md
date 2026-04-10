@@ -4,7 +4,7 @@
 
 Agentic RAG system for analyzing SGX (Singapore Exchange) annual reports. Users upload PDF annual reports; the system answers financial questions, generates chart analysis from page images, compares two companies side-by-side, and fetches live stock prices.
 
-**Stack:** LangGraph (orchestration), LangChain, FAISS (vector store), Jina embeddings, FastAPI (backend), MCP (stock price / news tools), SQLite (memory + checkpointing), OpenAI/Groq LLMs.
+**Stack:** LangGraph (orchestration), LangChain, ChromaDB (vector store), Qwen3-VL-Embedding-2B (local GPU embeddings), FastAPI (backend), MCP (stock price / news tools), SQLite (memory + checkpointing), OpenAI/Groq LLMs.
 
 ---
 
@@ -18,9 +18,9 @@ OrchestratorAgent (LangGraph StateGraph)
     ├── load_memory   → load prior Q&A context from SQLite
     ├── route         → LLM classifies intent → one of 4 routes
     │
-    ├── summary       → SummaryAgent   (FAISS RAG → structured JSON answer)
+    ├── summary       → SummaryAgent   (ChromaDB RAG → structured JSON answer)
     ├── chart         → ChartAgent     (page image → vision LLM → chart analysis)
-    ├── comparision   → ComparsionAgent (dual FAISS RAG → side-by-side table)
+    ├── comparision   → ComparsionAgent (dual ChromaDB RAG → side-by-side table)
     └── stock_price   → MCP tool call  (yfinance via stdio MCP server)
     │
     └── save_memory   → append Q&A to SQLite long-term memory
@@ -40,7 +40,7 @@ OrchestratorAgent (LangGraph StateGraph)
 | `src/agents/chart_agent.py` | Vision LLM pipeline: load page image → analyze charts/tables |
 | `src/agents/comparision_agent.py` | Dual-document RAG for company comparison |
 | `src/core/pdf_processor.py` | PDF → text chunks + page PNG images |
-| `src/core/vector_store.py` | FAISS index build/load/retrieve (one index per session) |
+| `src/core/vector_store.py` | ChromaDB collection build/load/retrieve (one collection per session) |
 | `src/memory/long_term.py` | SQLite-backed long-term memory (per session Q&A summaries) |
 | `src/memory/checkpoint.py` | LangGraph SQLite checkpointer (full graph state) |
 | `src/mcp_server/server.py` | FastMCP server: `get_stock_price` + `search_financial_news` |
@@ -55,7 +55,7 @@ OrchestratorAgent (LangGraph StateGraph)
 - Each uploaded PDF gets a `session_id` (UUID).
 - Files stored at `data/<session_id>/`.
 - Page images stored at `data/<session_id>/page_images/page_N.png`.
-- FAISS index stored at `faiss_index/<session_id>/`.
+- ChromaDB index stored at `chroma_index/<session_id>/`.
 - Long-term memory stored in `data/memory.db` (SQLite).
 - LangGraph checkpoints stored in `data/checkpoints.db` (SQLite).
 
