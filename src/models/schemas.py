@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional
+from typing import Optional,Literal
 
 # Agent Outputs
 
@@ -46,6 +46,23 @@ class FinancialSummary(BaseModel):
         return v
 
     summary: Optional[str] = Field(description="2-3 sentence analyst style summary of the financial performance")
+
+
+CHART_TYPES = Literal[
+    "bar", "line", "histogram", "pie", "scatter",
+    "waterfall", "area", "heatmap", "table", "combo", "unknown"
+]
+
+class ChartIntent(BaseModel):
+    """Extracted intent from the user's chart question.
+    
+    Used to (1) score page selection and (2) inject type-specific
+    guidance into the vision LLM prompt so it knows what to look for.
+    """
+    chart_type: CHART_TYPES = "unknown"
+    explicit_page: Optional[int] = None      # set if user said "page 12"
+    topic_keywords: list[str] = []           # e.g. ["revenue", "segment"]
+
 
 
 class ChartAnalysis(BaseModel):

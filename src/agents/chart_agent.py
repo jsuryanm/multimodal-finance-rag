@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from typing import Optional
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import JsonOutputParser
@@ -10,168 +11,317 @@ from src.agents.state import FinanceAgentState
 from src.core.pdf_processor import PDFProcessor
 from src.core.vector_store import VectorStore
 from src.exceptions.custom_exceptions import AgentError
-from src.models.schemas import ChartAnalysis
-from src.prompts.chart_prompt import CHART_DESCRIPTION_PROMPT
+from src.models.schemas import ChartAnalysis, ChartIntent
+from src.prompts.chart_prompt import build_chart_prompt
 from src.settings.config import get_vision_llm, settings
 from src.logger.custom_logger import logger
 
+
+# ── Chart type keyword map ────────────────────────────────────────────────────
+# Maps natural-language keywords a user might say to a canonical chart type.
+# Checked in order — first match wins. Keep "histogram" before "bar" so that
+# "distribution histogram" doesn't collapse to "bar".
+
+_CHART_TYPE_KEYWORDS: list[tuple[str, list[str]]] = [
+    ("histogram",  ["histogram", "distribution", "frequency", "bins", "bin"]),
+    ("waterfall",  ["waterfall", "bridge chart", "bridge graph", "contribution"]),
+    ("scatter",    ["scatter", "scatter plot", "correlation", "bubble"]),
+    ("heatmap",    ["heatmap", "heat map", "matrix", "correlation matrix"]),
+    ("pie",        ["pie", "donut", "doughnut", "breakdown", "composition", "share"]),
+    ("area",       ["area chart", "area graph", "stacked area", "cumulative"]),
+    ("combo",      ["combo", "dual axis", "bar and line", "line and bar"]),
+    ("line",       ["line chart", "line graph", "trend", "over time", "time series",
+                    "growth", "trajectory"]),
+    ("table",      ["table", "tabular", "row", "column", "grid", "figures"]),
+    ("bar",        ["bar chart", "bar graph", "bar", "column chart", "column graph",
+                    "grouped", "stacked bar", "revenue breakdown", "segment"]),
+]
+
+
 class ChartAgent:
-    """Vision based chart and table analysis agent
-    Flow: load_image -> analyze_image"""
+    """Vision-based chart and table analysis agent.
+
+    Flow:
+        extract_intent → load_image → analyze_image
+
+    The intent extraction step (new) infers chart type and page hints
+    from the user question BEFORE loading images. This lets us:
+        1. Score page candidates against the detected chart type.
+        2. Inject type-specific extraction guidance into the vision prompt.
+    """
 
     def __init__(self):
         self.vision_llm = get_vision_llm()
 
-    async def _find_best_chart_page(self, question: str, session_id: str) -> int:
-        """Return the most question-relevant chart page for this session.
+    # ── Intent extraction (Layer 1) ───────────────────────────────────────────
 
-        chart_pages.json now stores rich entries:
-            [{"page": 5, "tables": 2, "images": 1, "graphics": 14,
-              "caption": "Revenue by segment FY2024"}, ...]
+    @staticmethod
+    def extract_chart_intent(question: str) -> ChartIntent:
+        """Infer chart type and explicit page number from the user's question.
+        
+        Pure keyword matching — no LLM call. Fast and deterministic.
+        Runs BEFORE page selection so the chart type score can influence ranking.
+        
+        Examples:
+            "show histogram on page 12"     → ChartIntent(chart_type="histogram", explicit_page=12)
+            "describe the revenue bar chart" → ChartIntent(chart_type="bar", topic_keywords=["revenue"])
+            "what does page 5 show?"        → ChartIntent(chart_type="unknown", explicit_page=5)
+        """
+        q = question.lower()
 
-        Strategy:
-        1. Load chart_pages.json. If missing or empty, raise — don't silently
-           guess page 1 (old behaviour masked failures).
-        2. Score each chart page by caption/question keyword overlap and pick
-           the top-scoring page.
-        3. If no caption keywords match, fall back to ChromaDB MMR retrieval ∩
-           chart pages and return the first intersection.
-        4. Final fallback: the chart page with the most tables+graphics (i.e.
-           the most visually dense page), not just the first entry.
+        # Extract explicit page reference: "page 12", "p.12", "pg 12", "on 12"
+        page_match = re.search(r"\b(?:page|pg|p\.?)\s*(\d+)\b", q)
+        explicit_page = int(page_match.group(1)) if page_match else None
+
+        # Detect chart type from keywords
+        chart_type = "unknown"
+        for ctype, keywords in _CHART_TYPE_KEYWORDS:
+            if any(kw in q for kw in keywords):
+                chart_type = ctype
+                break
+
+        # Extract topic keywords (nouns likely to appear in captions)
+        # Strip common stop words and chart-type words to keep only topic signals.
+        _stop = {
+            "the", "a", "an", "on", "in", "of", "is", "are", "show", "describe",
+            "explain", "what", "does", "page", "chart", "graph", "table", "plot",
+            "figure", "bar", "line", "histogram", "pie", "scatter", "this",
+        }
+        topic_keywords = [
+            w for w in re.findall(r"[a-z]+", q)
+            if w not in _stop and len(w) > 3
+        ]
+
+        return ChartIntent(
+            chart_type=chart_type,
+            explicit_page=explicit_page,
+            topic_keywords=topic_keywords,
+        )
+
+    # ── Page selection (Layer 2) ──────────────────────────────────────────────
+
+    async def _find_best_chart_page(
+        self,
+        question: str,
+        session_id: str,
+        intent: Optional[ChartIntent] = None,
+    ) -> int:
+        """Select the most relevant chart page, boosted by chart type.
+
+        Scoring order (highest priority first):
+        1. Explicit page in question ("page 12") — return immediately.
+        2. Caption keyword match, boosted if the chart type is a visual match.
+        3. ChromaDB MMR retrieval intersected with chart pages.
+        4. Visual-density fallback (most tables + vector charts).
         """
         chart_pages_path = settings.DATA_DIR / session_id / "chart_pages.json"
 
         if not chart_pages_path.exists():
             raise AgentError(
                 f"chart_pages.json not found for session {session_id}",
-                detail="The PDF was not processed with the current pipeline. Re-upload the PDF.",
+                detail="Re-upload the PDF — it was processed with an older pipeline version.",
             )
 
         chart_pages: list[dict] = json.loads(chart_pages_path.read_text())
         if not chart_pages:
             raise AgentError(
-                f"No charts, graphs, or tables detected in session {session_id}",
-                detail="The uploaded PDF contains no visual elements the chart agent can analyse.",
+                f"No charts detected in session {session_id}",
+                detail="The PDF contains no visual elements.",
             )
 
-        # 1) Caption keyword ranking — cheap, deterministic, no extra LLM call.
-        best = self._rank_by_caption(question, chart_pages)
+        # 1. User specified a page explicitly — trust it.
+        if intent and intent.explicit_page:
+            available = {cp["page"] for cp in chart_pages}
+            if intent.explicit_page in available:
+                logger.info(f"Using explicit page {intent.explicit_page} from question")
+                return intent.explicit_page
+            # Page exists but isn't a chart page — still use it, user is explicit
+            logger.warning(
+                f"Page {intent.explicit_page} is not in chart_pages.json — "
+                "using anyway (user was explicit)"
+            )
+            return intent.explicit_page
+
+        # 2. Caption + chart-type keyword scoring
+        chart_type = intent.chart_type if intent else "unknown"
+        best = self._rank_by_caption_and_type(question, chart_pages, chart_type)
         if best is not None:
             logger.info(
-                f"Chart page {best['page']} selected by caption match "
-                f"('{best['caption']}') for session {session_id}"
+                f"Page {best['page']} selected (caption match, type='{chart_type}') "
+                f"for session {session_id}"
             )
             return best["page"]
 
-        # 2) Fall back to ChromaDB MMR ∩ chart pages.
+        # 3. ChromaDB overlap
         try:
             store = VectorStore(session_id=session_id)
             retriever = store.get_retriever(search_type="mmr", k=10)
             docs = await asyncio.to_thread(retriever.invoke, question)
             chart_page_numbers = {cp["page"] for cp in chart_pages}
-            overlap = [p for p in (doc.metadata.get("page", 0) + 1 for doc in docs) if p in chart_page_numbers]
+            overlap = [
+                p for p in (doc.metadata.get("page", 0) + 1 for doc in docs)
+                if p in chart_page_numbers
+            ]
             if overlap:
-                chosen = overlap[0]
-                logger.info(f"Chart page {chosen} selected by ChromaDB overlap for session {session_id}")
-                return chosen
+                logger.info(f"Page {overlap[0]} selected by ChromaDB overlap")
+                return overlap[0]
         except Exception as e:
-            logger.warning(f"ChromaDB chart page detection failed: {e} — using visual-density fallback")
+            logger.warning(f"ChromaDB chart page detection failed: {e}")
 
-        # 3) Visual-density fallback: pick the most table/graphics-heavy page.
-        densest = max(chart_pages, key=lambda cp: cp.get("tables", 0) * 3 + cp.get("figures", 0) + cp.get("vector_charts", 0) // 10)
-
-        logger.info(
-            f"Chart page {densest['page']} selected by visual density "
-            f"(tables={densest.get('tables', 0)}, graphics={densest.get('graphics', 0)}) "
-            f"for session {session_id}"
+        # 4. Visual-density fallback
+        densest = max(
+            chart_pages,
+            key=lambda cp: cp.get("tables", 0) * 3 + cp.get("figures", 0) + cp.get("vector_charts", 0) // 10,
         )
+        logger.info(f"Page {densest['page']} selected by visual density (fallback)")
         return densest["page"]
 
     @staticmethod
-    def _rank_by_caption(question: str, chart_pages: list[dict]) -> dict | None:
-        """Score chart pages by token overlap between caption and question.
+    def _rank_by_caption_and_type(
+        question: str,
+        chart_pages: list[dict],
+        chart_type: str,
+    ) -> dict | None:
+        """Score pages by caption overlap, boosted by chart type.
 
-        Returns the best-matching entry, or None if no caption shares any
-        non-stopword token with the question.
+        Chart-type boost: pages whose caption contains the chart type word
+        (or a synonym) get +5 bonus points, making them prefer the page the
+        user actually asked about when the chart type is explicit.
         """
         stop = {
             "the", "a", "an", "of", "in", "on", "for", "to", "and", "or", "is",
-            "are", "was", "were", "show", "what", "which", "whats", "where",
-            "how", "me", "my", "our", "their", "this", "that", "these", "those",
-            "chart", "graph", "table", "describe", "explain",
+            "are", "was", "were", "show", "what", "which", "where", "how",
+            "me", "my", "our", "their", "this", "that", "chart", "graph",
+            "table", "describe", "explain",
         }
 
+        # Chart type → caption synonyms to boost
+        _type_synonyms: dict[str, list[str]] = {
+            "bar":       ["bar", "column", "revenue", "segment"],
+            "line":      ["line", "trend", "growth", "over time"],
+            "histogram": ["histogram", "distribution", "frequency"],
+            "pie":       ["pie", "donut", "breakdown", "composition"],
+            "scatter":   ["scatter", "correlation"],
+            "waterfall": ["waterfall", "bridge"],
+            "area":      ["area", "cumulative"],
+            "heatmap":   ["heatmap", "matrix"],
+            "table":     ["table", "figures", "financial"],
+            "combo":     ["combined", "dual"],
+        }
+        type_hints = _type_synonyms.get(chart_type, [])
+
         def tokens(text: str) -> set[str]:
-            return {t for t in re.findall(r"[a-z0-9]+", (text or "").lower()) if t not in stop and len(t) > 2}
+            return {
+                t for t in re.findall(r"[a-z0-9]+", (text or "").lower())
+                if t not in stop and len(t) > 2
+            }
 
         q_tokens = tokens(question)
         if not q_tokens:
             return None
 
-        best_score = 0
-        best_entry: dict | None = None
+        best_score, best_entry = 0, None
         for cp in chart_pages:
-            score = len(q_tokens & tokens(cp.get("caption", "")))
-            # Tiebreaker: prefer pages with more tables
-            score = score * 10 + cp.get("tables", 0) * 3 + min(cp.get("vector_charts", 0) // 10, 3)
+            caption_tokens = tokens(cp.get("caption", ""))
+            score = len(q_tokens & caption_tokens) * 10
+
+            # Tiebreaker: visual density
+            score += cp.get("tables", 0) * 3 + min(cp.get("vector_charts", 0) // 10, 3)
+
+            # Chart-type boost
+            if any(hint in caption_tokens for hint in type_hints):
+                score += 5
 
             if score > best_score:
                 best_score = score
                 best_entry = cp
 
-        # Require at least one caption keyword match (score >= 10 after the *10 bump)
+        # Require at least one caption keyword (score >= 10 before tiebreakers)
         return best_entry if best_score >= 10 else None
+
+    # ── Image loading ────────────────────────────────────────────────────────
 
     async def load_image_node(self, state: FinanceAgentState) -> dict:
         session_id = state["session_id"]
+        question = state.get("question", "")
+
+        # Extract intent first — used for both page selection and prompt building
+        intent = self.extract_chart_intent(question)
+        logger.info(f"Chart intent: type='{intent.chart_type}', page={intent.explicit_page}")
+
+        # Resolve page number
         page_number = state.get("page_number")
         if not page_number:
-            question = state.get("question", "")
-            page_number = await self._find_best_chart_page(question, session_id)
-            logger.info(f"No page_number provided — auto-selected page {page_number}")
+            page_number = await self._find_best_chart_page(question, session_id, intent)
+            logger.info(f"Auto-selected page {page_number} for session {session_id}")
 
         images_dir = settings.DATA_DIR / session_id / "page_images"
         image_path = images_dir / f"page_{page_number}.png"
 
         if not image_path.exists():
-            raise AgentError(f"Path image not found for page {page_number}",
-                             detail=(f"Expected: {image_path}"
-                                     "Ensure the PDF was uploaded and page images were rendered"))
-    
+            raise AgentError(
+                f"Page image not found: page {page_number}",
+                detail=f"Expected path: {image_path}. Ensure PDF was uploaded and images were rendered.",
+            )
+
         image_b64 = PDFProcessor.image_to_base64(image_path)
         logger.info(f"Loaded page {page_number} image for session {session_id}")
-        return {"image_b64":image_b64}
-    
-    async def analyze_image_node(self,state: FinanceAgentState) -> dict:
-        """Sends page image to vision llm for chart/table analysis.
-        Buids a multimodal message: text prompt + base64-encoded image"""
+
+        return {
+            "image_b64": image_b64,
+            "page_number": page_number,
+            # Store intent so analyze_image_node can use the chart_type
+            "_chart_intent": intent,
+        }
+
+    # ── Vision LLM analysis ──────────────────────────────────────────────────
+
+    async def analyze_image_node(self, state: FinanceAgentState) -> dict:
+        """Send page image to vision LLM with type-aware prompt.
+
+        The key difference from before: build_chart_prompt(chart_type) injects
+        type-specific extraction guidance BEFORE the generic base prompt, so the
+        LLM knows exactly what to look for (axes, series, distribution shape, etc.)
+        depending on what kind of chart the user asked about.
+        """
         image_b64 = state.get("image_b64")
-        page_number = state.get("page_number",1)
+        page_number = state.get("page_number", 1)
         question = state.get("question") or f"Describe charts and tables on page {page_number}"
+        intent: ChartIntent = state.get("_chart_intent") or self.extract_chart_intent(question)
 
         if not image_b64:
-            raise AgentError("No image loaded cannot run chart analysis",
-                             detail="Image does not exist")
-        
+            raise AgentError("No image loaded — cannot run chart analysis")
+
+        # Build type-aware prompt
+        system_prompt = build_chart_prompt(intent.chart_type)
+
+        # Append a context hint if we know the chart type, so the LLM is primed
+        type_hint = ""
+        if intent.chart_type != "unknown":
+            type_hint = (
+                f"\n\nThe user is likely asking about a **{intent.chart_type}** chart. "
+                f"Apply the {intent.chart_type}-specific extraction guidance above."
+            )
+
         message = HumanMessage(content=[
             {
                 "type": "text",
                 "text": (
-                    f"{CHART_DESCRIPTION_PROMPT}\n\n"
+                    f"{system_prompt}{type_hint}\n\n"
                     f"User question: {question}\n\n"
-                    f"This is page {page_number} of annual report."
-                    "Describe all financial visuals precisely."
-                    "CRITICAL: No markdown code blocks, no backticks, no preamble."
+                    f"This is page {page_number} of an SGX annual report. "
+                    "Extract all financial visuals with full precision. "
+                    "CRITICAL: No markdown, no backticks, no preamble. "
                     "Response must start with { and end with }."
-                )
+                ),
             },
             {
-                "type":"image_url",
-                "image_url":{
-                    "url":f"data:image/png;base64,{image_b64}",
-                    "detail":"high"
-                }
-            }
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{image_b64}",
+                    "detail": "high",
+                },
+            },
         ])
 
         response = await self.vision_llm.ainvoke([message])
@@ -179,44 +329,46 @@ class ChartAgent:
         try:
             parser = JsonOutputParser()
             result = parser.parse(response.content)
-
             chart_obj = ChartAnalysis(**result)
             answer = chart_obj.explanation
             structured = chart_obj.model_dump()
-        
+
         except Exception as e:
             logger.warning(f"Could not parse ChartAnalysis: {e}")
             answer = response.content
-            structured =  {"raw": answer}
-        
-        ai_message = AIMessage(content=answer)
-        logger.info(f"Chart analysis complete for page {page_number}")
+            structured = {"raw": answer}
 
-        return {"answer":answer,
-                "structured_responses": structured,
-                "messages":[ai_message]}
-    
-    async def run(self,state: FinanceAgentState) -> dict:
-        """Full chart analysis workflow called by orchestrator"""
-        try: 
+        ai_message = AIMessage(content=answer)
+        logger.info(
+            f"Chart analysis complete for page {page_number} "
+            f"(type='{intent.chart_type}')"
+        )
+        return {
+            "answer": answer,
+            "structured_responses": structured,
+            "messages": [ai_message],
+        }
+
+    # ── run() and stream() (unchanged wiring, updated internals) ─────────────
+
+    async def run(self, state: FinanceAgentState) -> dict:
+        try:
             image_update = await self.load_image_node(state)
             state.update(image_update)
-
             analysis_update = await self.analyze_image_node(state)
             state.update(analysis_update)
-
-            logger.info(f"ChartAgent workflow for session {state['session_id']}")
-
-            return {"answer":state.get("answer"),
-                    "structured_responses":state.get("structured_responses"),
-                    "messages":state.get("messages"),
-                    "image_b64":state.get("image_b64"),
-                    "route":"chart"}
-        
+            logger.info(f"ChartAgent workflow complete for session {state['session_id']}")
+            return {
+                "answer": state.get("answer"),
+                "structured_responses": state.get("structured_responses"),
+                "messages": state.get("messages"),
+                "image_b64": state.get("image_b64"),
+                "route": "chart",
+            }
         except Exception as e:
-            raise AgentError("ChartAgent execution failed",detail=str(e))
+            raise AgentError("ChartAgent execution failed", detail=str(e))
 
-    async def stream(self,state: FinanceAgentState):
+    async def stream(self, state: FinanceAgentState):
         try:
             image_update = await self.load_image_node(state)
             state.update(image_update)
@@ -224,31 +376,28 @@ class ChartAgent:
             image_b64 = state.get("image_b64")
             page_number = state.get("page_number")
             question = state.get("question") or f"Describe charts on page {page_number}"
+            intent: ChartIntent = state.get("_chart_intent") or self.extract_chart_intent(question)
+            system_prompt = build_chart_prompt(intent.chart_type)
+
             message = HumanMessage(content=[
                 {
-                    "type":"text",
-                    "text":(
-                        f"{CHART_DESCRIPTION_PROMPT}\n\n"
+                    "type": "text",
+                    "text": (
+                        f"{system_prompt}\n\n"
                         f"User question: {question}\n\n"
-                        f"This is page {page_number} of annual report."
+                        f"Page {page_number} of SGX annual report. "
                         "Describe all financial visuals precisely."
-                    )
+                    ),
                 },
-
                 {
-                    "type":"image_url",
-                    "image_url":{
-                        "url":
-                        f"data:image/png;base64,{image_b64}"
-                    }
-                }
-
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                },
             ])
 
             async for chunk in self.vision_llm.astream([message]):
                 if chunk.content:
                     yield chunk.content
-            
-        except Exception as e:
-            raise AgentError("ChartAgent streaming failed")
 
+        except Exception as e:
+            raise AgentError("ChartAgent streaming failed", detail=str(e))
