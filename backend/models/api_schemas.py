@@ -21,4 +21,4 @@ class ChatRequest(BaseModel):
     session_id: str
     question: str
     session_id_b: Optional[str] = None
-    page_number: Optional[int] = 1
+    page_number: Optional[int] = None

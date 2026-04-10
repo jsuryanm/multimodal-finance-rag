@@ -156,22 +156,36 @@ class ChartAgent:
         try:
             store = VectorStore(session_id=session_id)
             retriever = store.get_retriever(search_type="mmr", k=10)
+            
             docs = await asyncio.to_thread(retriever.invoke, question)
+            
             chart_page_numbers = {cp["page"] for cp in chart_pages}
+            
             overlap = [
                 p for p in (doc.metadata.get("page", 0) + 1 for doc in docs)
                 if p in chart_page_numbers
             ]
+            
             if overlap:
                 logger.info(f"Page {overlap[0]} selected by ChromaDB overlap")
                 return overlap[0]
         except Exception as e:
             logger.warning(f"ChromaDB chart page detection failed: {e}")
 
-        # 4. Visual-density fallback
+        visual_pages = [cp for cp in chart_pages
+                        if cp.get("tables", 0) > 0 
+                        or cp.get("figures", 0) > 0 
+                        or cp.get("vector_charts", 0) >= 20]  # 20 is the detection threshold
+
+        candidates = visual_pages if visual_pages else chart_pages  # absolute fallback
+
         densest = max(
-            chart_pages,
-            key=lambda cp: cp.get("tables", 0) * 3 + cp.get("figures", 0) + cp.get("vector_charts", 0) // 10,
+            candidates,
+            key=lambda cp: (
+                cp.get("tables", 0) * 3 
+                + cp.get("figures", 0) 
+                + cp.get("vector_charts", 0) // 10
+            ),
         )
         logger.info(f"Page {densest['page']} selected by visual density (fallback)")
         return densest["page"]
@@ -276,80 +290,58 @@ class ChartAgent:
 
     # ── Vision LLM analysis ──────────────────────────────────────────────────
 
-    async def analyze_image_node(self, state: FinanceAgentState) -> dict:
-        """Send page image to vision LLM with type-aware prompt.
+    async def load_image_node(self, state: FinanceAgentState) -> dict:
+        session_id = state["session_id"]
+        question = state.get("question", "")
 
-        The key difference from before: build_chart_prompt(chart_type) injects
-        type-specific extraction guidance BEFORE the generic base prompt, so the
-        LLM knows exactly what to look for (axes, series, distribution shape, etc.)
-        depending on what kind of chart the user asked about.
-        """
-        image_b64 = state.get("image_b64")
-        page_number = state.get("page_number", 1)
-        question = state.get("question") or f"Describe charts and tables on page {page_number}"
-        intent: ChartIntent = state.get("_chart_intent") or self.extract_chart_intent(question)
+        # Step 1: Extract intent from the question
+        intent = self.extract_chart_intent(question)
+        logger.info(f"Chart intent: type='{intent.chart_type}', page={intent.explicit_page}")
 
-        if not image_b64:
-            raise AgentError("No image loaded — cannot run chart analysis")
+        # Step 2: Resolve page number with correct priority:
+        #   (a) explicit page in the question ("page 12") — highest priority
+        #   (b) page_number from state (set by frontend) — only if no explicit mention in question
+        #   (c) auto-detect via _find_best_chart_page — fallback
+        
+        if intent.explicit_page:
+            # User said "page 12" or "page199" in their question — trust this above all else
+            page_number = intent.explicit_page
+            logger.info(f"Using explicit page {page_number} from question intent")
 
-        # Build type-aware prompt
-        system_prompt = build_chart_prompt(intent.chart_type)
+        elif state.get("page_number"):
+            # Frontend passed a specific page (e.g. user clicked a chart page button)
+            page_number = state["page_number"]
+            logger.info(f"Using page {page_number} from request state")
 
-        # Append a context hint if we know the chart type, so the LLM is primed
-        type_hint = ""
-        if intent.chart_type != "unknown":
-            type_hint = (
-                f"\n\nThe user is likely asking about a **{intent.chart_type}** chart. "
-                f"Apply the {intent.chart_type}-specific extraction guidance above."
+        else:
+            # Neither — auto-detect the best chart page
+            page_number = await self._find_best_chart_page(question, session_id, intent)
+            logger.info(f"Auto-selected page {page_number} for session {session_id}")
+
+        # Step 3: Load the image
+        images_dir = settings.DATA_DIR / session_id / "page_images"
+        image_path = images_dir / f"page_{page_number}.png"
+
+        if not image_path.exists():
+            # Page number may be out of range for this PDF
+            raise AgentError(
+                f"Page image not found: page {page_number}",
+                detail=(
+                    f"Expected path: {image_path}. "
+                    f"This PDF has {len(list(images_dir.glob('page_*.png')))} pages. "
+                    "Check the page number is within range."
+                ),
             )
 
-        message = HumanMessage(content=[
-            {
-                "type": "text",
-                "text": (
-                    f"{system_prompt}{type_hint}\n\n"
-                    f"User question: {question}\n\n"
-                    f"This is page {page_number} of an SGX annual report. "
-                    "Extract all financial visuals with full precision. "
-                    "CRITICAL: No markdown, no backticks, no preamble. "
-                    "Response must start with { and end with }."
-                ),
-            },
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/png;base64,{image_b64}",
-                    "detail": "high",
-                },
-            },
-        ])
+        image_b64 = PDFProcessor.image_to_base64(image_path)
+        logger.info(f"Loaded page {page_number} image for session {session_id}")
 
-        response = await self.vision_llm.ainvoke([message])
-
-        try:
-            parser = JsonOutputParser()
-            result = parser.parse(response.content)
-            chart_obj = ChartAnalysis(**result)
-            answer = chart_obj.explanation
-            structured = chart_obj.model_dump()
-
-        except Exception as e:
-            logger.warning(f"Could not parse ChartAnalysis: {e}")
-            answer = response.content
-            structured = {"raw": answer}
-
-        ai_message = AIMessage(content=answer)
-        logger.info(
-            f"Chart analysis complete for page {page_number} "
-            f"(type='{intent.chart_type}')"
-        )
         return {
-            "answer": answer,
-            "structured_responses": structured,
-            "messages": [ai_message],
+            "image_b64": image_b64,
+            "page_number": page_number,
+            "_chart_intent": intent,
         }
-
-    # ── run() and stream() (unchanged wiring, updated internals) ─────────────
+        # ── run() and stream() (unchanged wiring, updated internals) ─────────────
 
     async def run(self, state: FinanceAgentState) -> dict:
         try:

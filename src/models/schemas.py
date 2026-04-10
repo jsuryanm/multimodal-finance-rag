@@ -66,22 +66,15 @@ class ChartIntent(BaseModel):
 
 
 class ChartAnalysis(BaseModel):
-    # Analysis of a chart or table from pdf page 
-    visual_type: Optional[str] = Field(description="Type of visual: bar chart, line chart, pie chart, table, etc")
+    visual_type: Optional[str] = Field(default=None, description="Type of visual")
+    title: Optional[str] = Field(default=None, description="Chart or table title if visible")
+    time_period: Optional[str] = Field(default=None, description="Time period covered")
     
-    title: Optional[str] = Field(default=None,
-                                 description="Chart or table title if visible")
-    
-    time_period: Optional[str] = Field(default=None,
-                                       description="Time period covered, eg. '2020-2024'")
-    
-    key_values: str = Field(description="Most important numerical values shown")
-
-    trend: str = Field(description="Most important numerical values shown")
-    
-    key_insight: str = Field(description="The most single most important insight from the visual")
-    explanation: str = Field(description="Full explanation of what the visual shows in financial terms")
-
+    # These were the broken fields — make them Optional with fallback defaults
+    key_values: Optional[str] = Field(default=None, description="Most important numerical values shown")
+    trend: Optional[str] = Field(default=None, description="Overall trend direction and magnitude")
+    key_insight: Optional[str] = Field(default=None, description="Single most important insight from the visual")
+    explanation: Optional[str] = Field(default=None, description="Full explanation in financial terms")
 
 class ComparisionRow(BaseModel):
     # A single row in the comparision table
