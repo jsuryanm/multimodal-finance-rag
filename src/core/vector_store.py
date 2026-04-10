@@ -31,7 +31,7 @@ class VectorStore:
         if not documents:
             raise VectorStoreError("No documents provided for indexing")
 
-        filtered = [d for d in documents if len(d.page_content.strip()) > 20]
+        filtered = [d for d in documents if len(d.page_content.strip()) > 50]
         if not filtered:
             raise VectorStoreError(
                 "All extracted chunks were too short to index",
