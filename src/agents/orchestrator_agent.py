@@ -519,48 +519,80 @@ class OrchestratorAgent:
 
         if self._app is None:
             await self.build_graph()
-        
-        config = {"configurable":{"thread_id":thread_id or session_id}}
-        initial_state = {"messages":[HumanMessage(content=question)],
-                        "session_id":session_id,
-                        "session_id_b":session_id_b,
-                        "question":question,
-                        "page_number":page_number}
-        
-        route_emitted = False
-        async for event in self._app.astream_events(
-            initial_state, config=config, version="v2"):
 
+        config = {"configurable": {"thread_id": thread_id or session_id}}
+        initial_state = {
+            "messages":    [HumanMessage(content=question)],
+            "session_id":  session_id,
+            "session_id_b": session_id_b,
+            "question":    question,
+            "page_number": page_number,
+        }
+
+        route_emitted = False
+        stock_price_complete = False
+        stock_price_text = ""
+        summary_started = False
+
+        async for event in self._app.astream_events(
+            initial_state, config=config, version="v2"
+        ):
             event_type = event.get("event")
             node = event.get("metadata", {}).get("langgraph_node", "")
 
-            # Surface node errors as [ERROR] tokens so the stream never silently empties
+            # Surface node errors — skip routing/memory/merge nodes
             if event_type == "on_chain_error":
-                if node and node not in ("route", "load_memory", "save_memory"):
+                if node and node not in ("route", "load_memory", "save_memory", "merge"):
                     error = event.get("data", {}).get("error")
                     error_msg = str(error) if error else "Unknown agent error"
                     logger.error(f"Node '{node}' raised: {error_msg}")
                     yield f"[ERROR] {error_msg}"
                     return
 
-            # Capture route from the route node's chain-end event and emit first
-            if not route_emitted and event_type == "on_chain_end":
-                if node == "route":
-                    output = event.get("data", {}).get("output", {})
-                    route = output.get("route", "summary") if isinstance(output, dict) else "summary"
-                    yield f"[ROUTE:{route}]"
-                    route_emitted = True
+            # Emit route badge once from the route node's output
+            if not route_emitted and event_type == "on_chain_end" and node == "route":
+                output = event.get("data", {}).get("output", {})
+                route = output.get("route", "summary") if isinstance(output, dict) else "summary"
+                yield f"[ROUTE:{route}]"
+                route_emitted = True
+                continue
+
+            # Stock price node completed — buffer for possible multi-intent prefix
+            if event_type == "on_chain_end" and node == "stock_price":
+                output = event.get("data", {}).get("output", {})
+                partial = output.get("partial_answers", []) if isinstance(output, dict) else []
+                stock_price_text = partial[0]["text"] if partial else ""
+                stock_price_complete = True
+                continue
+
+            # LLM token stream from summary/chart/comparision
+            if event_type == "on_chat_model_stream":
+                if node in ("route", "load_memory", "save_memory", "merge"):
                     continue
 
-            if event_type != "on_chat_model_stream":
+                # Multi-intent: emit stock-price section before first summary token
+                if node == "summary" and not summary_started and stock_price_complete:
+                    label_sp = _SECTION_LABEL["stock_price"]
+                    label_su = _SECTION_LABEL["summary"]
+                    yield (
+                        f"**{label_sp}**\n\n{stock_price_text}"
+                        f"\n\n---\n\n**{label_su}**\n\n"
+                    )
+                    summary_started = True
+
+                if node == "summary":
+                    summary_started = True
+
+                chunk = event["data"].get("chunk")
+                if chunk and hasattr(chunk, "content") and chunk.content:
+                    yield chunk.content
                 continue
 
-            if node in ("route", "load_memory", "save_memory"):
+            # Single stock_price route: merge_node fires, no LLM tokens were yielded
+            if event_type == "on_chain_end" and node == "merge":
+                if stock_price_complete and not summary_started:
+                    yield stock_price_text
                 continue
-
-            chunk = event["data"].get("chunk")
-            if chunk and hasattr(chunk, "content") and chunk.content:
-                yield chunk.content
 
 _orchestrator: OrchestratorAgent | None = None
 
