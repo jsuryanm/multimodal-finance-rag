@@ -94,3 +94,73 @@ def test_decide_route_unknown_falls_back(orchestrator):
     state = {"route": "unknown_xyz", "question": "something",
              "session_id": "abc", "messages": [], "session_id_b": None}
     assert orchestrator._decide_route(state) == ["summary"]
+
+
+import asyncio
+
+
+def test_merge_node_single_answer(orchestrator):
+    """Single partial_answer passes through without section headers."""
+    state = {
+        "partial_answers": [{"route": "summary", "text": "Revenue was $10M."}],
+        "active_routes": ["summary"],
+    }
+    result = asyncio.run(orchestrator._merge_node(state))
+    assert result == {"answer": "Revenue was $10M."}
+
+
+def test_merge_node_multi_answer_ordering(orchestrator):
+    """Stock price appears before summary in merged output."""
+    state = {
+        "partial_answers": [
+            {"route": "summary", "text": "Revenue was $10M."},
+            {"route": "stock_price", "text": "DBS: SGD 38.50"},
+        ],
+        "active_routes": ["summary", "stock_price"],
+    }
+    result = asyncio.run(orchestrator._merge_node(state))
+    answer = result["answer"]
+    assert "📈 Stock Price" in answer
+    assert "📄 Summary" in answer
+    assert answer.index("📈 Stock Price") < answer.index("📄 Summary")
+    assert "DBS: SGD 38.50" in answer
+    assert "Revenue was $10M." in answer
+
+
+def test_summary_node_returns_partial_answers(orchestrator):
+    """_summary_node wraps agent result into partial_answers format."""
+    from unittest.mock import AsyncMock
+    orchestrator.summary_agent.run = AsyncMock(return_value={
+        "answer": "Revenue was $10M.",
+        "documents": [],
+        "structured_responses": {"summary": "Revenue was $10M."},
+        "messages": [],
+    })
+    state = {
+        "question": "What is revenue?",
+        "session_id": "abc",
+        "messages": [],
+        "long_term_summary": "",
+    }
+    result = asyncio.run(orchestrator._summary_node(state))
+    assert result["partial_answers"] == [{"route": "summary", "text": "Revenue was $10M."}]
+    assert result["active_routes"] == ["summary"]
+    assert "answer" not in result
+
+
+def test_stock_price_node_returns_partial_answers(orchestrator):
+    """_stock_price_node wraps MCP result into partial_answers format."""
+    from unittest.mock import AsyncMock
+    mock_tool = MagicMock()
+    mock_tool.ainvoke = AsyncMock(return_value='{"price": 38.50, "currency": "SGD", "ticker": "D05.SI"}')
+    orchestrator._mcp_tools = {"get_stock_price": mock_tool}
+    state = {
+        "question": "What is DBS stock price?",
+        "session_id": "abc",
+        "messages": [],
+    }
+    result = asyncio.run(orchestrator._stock_price_node(state))
+    assert result["active_routes"] == ["stock_price"]
+    assert len(result["partial_answers"]) == 1
+    assert result["partial_answers"][0]["route"] == "stock_price"
+    assert "answer" not in result

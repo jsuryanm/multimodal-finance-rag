@@ -20,6 +20,21 @@ from src.settings.config import get_llm, settings
 from src.logger.custom_logger import logger 
 from src.exceptions.custom_exceptions import OrchestratorError
 
+_SECTION_ORDER: dict[str, int] = {
+    "stock_price": 0,
+    "summary": 1,
+    "chart": 2,
+    "comparision": 3,
+}
+
+_SECTION_LABEL: dict[str, str] = {
+    "stock_price": "📈 Stock Price",
+    "summary":     "📄 Summary",
+    "chart":       "🖼 Chart Analysis",
+    "comparision": "⚖️ Comparison",
+}
+
+
 class OrchestratorAgent:
     """
     Main orchestrator that routes user question to correct 
@@ -218,36 +233,58 @@ class OrchestratorAgent:
         except Exception as e:
             raise OrchestratorError("Router LLM call failed", detail=str(e))
     
-    async def _summary_node(self,state: FinanceAgentState) -> dict:
-        """Delegate to SummaryAgent"""
+    async def _summary_node(self, state: FinanceAgentState) -> dict:
+        """Delegate to SummaryAgent and wrap result in partial_answers."""
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self.summary_agent.run(state),
                 timeout=settings.LLM_TIMEOUT,
             )
         except asyncio.TimeoutError:
             raise OrchestratorError(f"SummaryAgent timed out after {settings.LLM_TIMEOUT}s")
+        return {
+            "partial_answers": [{"route": "summary", "text": result.get("answer", "")}],
+            "active_routes": ["summary"],
+            "documents": result.get("documents"),
+            "structured_responses": result.get("structured_responses"),
+            "messages": result.get("messages", []),
+        }
 
-    async def _chart_node(self,state: FinanceAgentState) -> dict:
-        """Delegate to ChartAgent"""
+    async def _chart_node(self, state: FinanceAgentState) -> dict:
+        """Delegate to ChartAgent and wrap result in partial_answers."""
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self.chart_agent.run(state),
                 timeout=settings.LLM_TIMEOUT,
             )
         except asyncio.TimeoutError:
             raise OrchestratorError(f"ChartAgent timed out after {settings.LLM_TIMEOUT}s")
+        return {
+            "partial_answers": [{"route": "chart", "text": result.get("answer", "")}],
+            "active_routes": ["chart"],
+            "image_b64": result.get("image_b64"),
+            "structured_responses": result.get("structured_responses"),
+            "messages": result.get("messages", []),
+        }
 
-    async def _comparision_node(self,state: FinanceAgentState) -> dict:
-        """Delegate to ComparsionAgent"""
+    async def _comparision_node(self, state: FinanceAgentState) -> dict:
+        """Delegate to ComparsionAgent and wrap result in partial_answers."""
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self.comparision_agent.run(state),
                 timeout=settings.LLM_TIMEOUT,
             )
         except asyncio.TimeoutError:
             raise OrchestratorError(f"ComparsionAgent timed out after {settings.LLM_TIMEOUT}s")
-    
+        return {
+            "partial_answers": [{"route": "comparision", "text": result.get("answer", "")}],
+            "active_routes": ["comparision"],
+            "docs_a": result.get("docs_a"),
+            "docs_b": result.get("docs_b"),
+            "structured_responses": result.get("structured_responses"),
+            "messages": result.get("messages", []),
+        }
+
     async def _stock_price_node(self,state: FinanceAgentState) -> dict:
         """
         Fetch live stock price by calling the MCP server's get_stock_price tool.
@@ -267,9 +304,11 @@ class OrchestratorAgent:
         if not stock_tool:
             logger.error("get_stock_price MCP tool not found")
             answer = "Stock price tool is unavailable. Check MCP server"
-            return {"answer":answer,
-                    "route":"stock_price",
-                    "messages":[AIMessage(content=answer)]}
+            return {
+                "partial_answers": [{"route": "stock_price", "text": answer}],
+                "active_routes": ["stock_price"],
+                "messages": [AIMessage(content=answer)],
+            }
         
         try:
             raw = await asyncio.wait_for(
@@ -278,7 +317,11 @@ class OrchestratorAgent:
             )
         except asyncio.TimeoutError:
             answer = f"Stock price lookup timed out after {settings.LLM_TIMEOUT}s"
-            return {"answer": answer, "route": "stock_price", "messages": [AIMessage(content=answer)]}
+            return {
+                "partial_answers": [{"route": "stock_price", "text": answer}],
+                "active_routes": ["stock_price"],
+                "messages": [AIMessage(content=answer)],
+            }
 
         # langchain_mcp_adapters returns a list of TextContent objects;
         # extract the JSON text and parse it into a dict
@@ -299,9 +342,11 @@ class OrchestratorAgent:
         answer = self._format_stock_response(result)
         logger.info(f"Stock price fetched for {ticker}")
 
-        return {"answer":answer,
-                "route":"stock_price",
-                "messages":[AIMessage(content=answer)]}
+        return {
+            "partial_answers": [{"route": "stock_price", "text": answer}],
+            "active_routes": ["stock_price"],
+            "messages": [AIMessage(content=answer)],
+        }
     
     async def _save_memory_node(self,state: FinanceAgentState) -> dict:
         """
@@ -326,6 +371,31 @@ class OrchestratorAgent:
         logger.info(f"Saved long term memory for session: {session_id}")
         return {}
     
+    async def _merge_node(self, state: FinanceAgentState) -> dict:
+        """
+        Aggregate partial_answers from all completed agent branches into a
+        single formatted answer.
+
+        Single-route: copies the one answer through unchanged.
+        Multi-route: sorts by _SECTION_ORDER (stock_price first, summary second)
+        and joins sections with bold headers and --- dividers.
+        """
+        parts = sorted(
+            state.get("partial_answers", []),
+            key=lambda x: _SECTION_ORDER.get(x["route"], 99),
+        )
+        if not parts:
+            return {"answer": ""}
+        if len(parts) == 1:
+            return {"answer": parts[0]["text"]}
+        sections = [
+            f"**{_SECTION_LABEL.get(p['route'], p['route'])}**\n\n{p['text']}"
+            for p in parts
+        ]
+        merged = "\n\n---\n\n".join(sections)
+        logger.info(f"Merged {len(parts)} agent responses: {[p['route'] for p in parts]}")
+        return {"answer": merged}
+
     def _decide_route(self, state: FinanceAgentState) -> list[str]:
         """
         Read route from state and apply override rules. Returns a list so
