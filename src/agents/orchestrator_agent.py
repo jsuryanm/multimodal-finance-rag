@@ -445,7 +445,7 @@ class OrchestratorAgent:
         await self._connect_mcp()
 
         await self.long_term_memory.setup()
-        
+
         self._checkpointer_cm,self.checkpointer = await get_checkpointer()
         graph = StateGraph(FinanceAgentState)
 
@@ -455,8 +455,9 @@ class OrchestratorAgent:
         graph.add_node("chart",self._chart_node)
         graph.add_node("comparision",self._comparision_node)
         graph.add_node("stock_price",self._stock_price_node)
+        graph.add_node("merge",self._merge_node)
         graph.add_node("save_memory",self._save_memory_node)
-          
+
         graph.add_edge(START,"load_memory")
         graph.add_edge("load_memory","route")
         graph.add_conditional_edges("route",
@@ -467,10 +468,12 @@ class OrchestratorAgent:
                                         "comparision":"comparision",
                                         "stock_price":"stock_price"
                                     })
-        
+
+        # All agents converge on merge (LangGraph waits for all parallel branches)
         for agent_node in ["summary","chart","comparision","stock_price"]:
-            graph.add_edge(agent_node,"save_memory")
-        
+            graph.add_edge(agent_node,"merge")
+
+        graph.add_edge("merge","save_memory")
         graph.add_edge("save_memory",END)
         self._app = graph.compile(checkpointer=self.checkpointer)
         logger.info("OrchestratorAgent graph compiled successfully")
@@ -498,7 +501,7 @@ class OrchestratorAgent:
         result = await self._app.ainvoke(initial_state,config=config)
 
         return {"answer":result.get("answer",""),
-                "route":result.get("route",""),
+                "route":", ".join(result.get("active_routes",[""])),
                 "session_id":session_id}
     
     async def stream(self,
