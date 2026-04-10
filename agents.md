@@ -120,6 +120,10 @@ load_image_node  →  analyze_image_node
 - Requires a vision-capable LLM (`get_vision_llm()`)
 - `page_number` must be set in state; defaults to `1` if not provided
 
+### Prompt brace escaping gotcha
+
+`CHART_BASE_PROMPT` in [src/prompts/chart_prompt.py](src/prompts/chart_prompt.py) is consumed as a plain Python string via an f-string in [src/agents/chart_agent.py:309](src/agents/chart_agent.py#L309), **not** via `ChatPromptTemplate.format()`. Because of that, the schema example inside the prompt must use single `{` and `}` characters. Writing them as `{{` `}}` (LangChain template escape syntax) causes the escapes to leak verbatim to the vision LLM, which then mirrors them and returns JSON wrapped in `{{ ... }}`. `JsonOutputParser` then fails with `Invalid json output: {{`. If you refactor this prompt into an actual `ChatPromptTemplate`, re-add the escapes at the same time.
+
 ---
 
 ## ComparsionAgent

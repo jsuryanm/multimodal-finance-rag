@@ -126,3 +126,9 @@ async def my_new_tool(param: str) -> dict:
 ```
 
 The tool is automatically picked up by the orchestrator on the next `build_graph()` call. To route user questions to it, add a new graph node and update `_decide_route` and the conditional edge map in `build_graph()`.
+
+---
+
+## Note: Prompt templates vs. raw f-strings
+
+MCP tools are orthogonal to agent prompts, but one pitfall is worth recording here because it has bitten the vision-based agents that also touch this file tree: prompt strings in [src/prompts/](src/prompts/) are consumed by the agents as **raw Python f-strings**, not via `ChatPromptTemplate.format()`. That means JSON schema examples embedded in a prompt must use single `{` and `}` braces — **do not escape them as `{{` `}}`**. If you do, the escape characters pass through verbatim to the LLM, the model copies them into its output, and `JsonOutputParser` rejects the result with `Invalid json output: {{ ... }}`. This was the root cause of a `ChartAgent` parse failure — see the ChartAgent section of [agents.md](agents.md) and pitfall #13 in [CLAUDE.md](CLAUDE.md) for the full story.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 import asyncio
 from contextlib import asynccontextmanager
@@ -82,6 +83,13 @@ async def upload(file: UploadFile = File(...)):
 async def chat_stream(request: ChatRequest):
     orchestrator = await get_orchestrator()
 
+    def _sse(payload: str) -> str:
+        # JSON-encode the payload so any embedded newlines become \n escapes.
+        # Raw '\n' inside an SSE `data:` line terminates the event early and
+        # causes the Streamlit client to drop continuation lines — see the
+        # /chat/stream streaming notes in CLAUDE.md.
+        return f"data: {json.dumps(payload)}\n\n"
+
     async def generate():
         try:
             async for chunk in orchestrator.stream(
@@ -90,13 +98,13 @@ async def chat_stream(request: ChatRequest):
                 session_id_b=request.session_id_b,
                 page_number=request.page_number,
             ):
-                yield f"data: {chunk}\n\n"
-            yield "data: [DONE]\n\n"
+                yield _sse(chunk)
+            yield _sse("[DONE]")
         except FinDocBaseException as e:
-            yield f"data: [ERROR] {e}\n\n"
+            yield _sse(f"[ERROR] {e}")
         except Exception as e:
             logger.error(f"Unexpected streaming error: {e}")
-            yield f"data: [ERROR] Internal server error\n\n"
+            yield _sse("[ERROR] Internal server error")
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

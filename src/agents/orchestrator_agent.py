@@ -282,7 +282,7 @@ class OrchestratorAgent:
             yield f"[ROUTE:{route}]"
             yield answer
         except Exception as e:
-            logger.error(f"Orchestrator stream failed: {e}")
+            logger.error(f"Orchestrator stream failed: {e} | detail: {getattr(e, 'detail', '')}")
             yield f"[ERROR] {e}"
 
 

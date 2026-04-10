@@ -17,26 +17,27 @@ financial visual on the page with investment-grade precision.
 
 ## Output format
 A single JSON object — no markdown fences, no backticks, no preamble.
-Response MUST start with {{ and end with }}.
+Response MUST start with a single `{` character and end with a single `}` character.
+Do NOT double the braces. Output plain JSON.
 
-{{
+{
   "visual_type": string,
   "title": string | null,
   "time_period": string | null,
   "x_axis": string | null,
   "y_axis": string | null,
   "series": [
-    {{
+    {
       "name": string,
       "values": string,
       "color": string | null
-    }}
+    }
   ],
   "key_values": string,
   "trend": string,
   "key_insight": string,
   "explanation": string
-}}
+}
 """
 
 # ── Per-type guidance injected BEFORE the base prompt ─────────────────────

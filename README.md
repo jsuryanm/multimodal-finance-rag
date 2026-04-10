@@ -209,3 +209,4 @@ The `StockAgent` is a ReAct loop — the LLM decides when to call `get_stock_pri
 - **Streaming is not token-by-token.** Agents return structured JSON, so `/chat/stream` runs each agent to completion, then emits the route badge and final answer string. See the `stream()` docstring in `src/agents/orchestrator_agent.py`.
 - **Memory** is per-session. Long-term memory is stored in `data/memory.db`; LangGraph checkpoints in `data/checkpoints.db`.
 - **Test the MCP server** independently with `uv run mcp dev src/mcp_server/server.py` before running the full orchestrator.
+- **Prompt files use single braces (`{` / `}`), not `{{` / `}}`.** Agent prompts in `src/prompts/` are consumed as raw Python f-strings, not via `ChatPromptTemplate.format()`, so LangChain-style brace escaping must NOT be used in the schema examples — the escapes leak to the LLM and `JsonOutputParser` then fails. See pitfall #13 in [`CLAUDE.md`](CLAUDE.md) for the full write-up.

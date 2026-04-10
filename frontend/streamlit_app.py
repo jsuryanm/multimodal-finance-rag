@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import requests
 import streamlit as st
 
@@ -143,7 +145,12 @@ def _stream_answer(question: str):
                 line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
                 if not line.startswith("data: "):
                     continue
-                data = line[6:]
+                # Backend JSON-encodes every SSE payload so embedded newlines
+                # in multi-line agent answers survive the `data: ...\n\n` frame.
+                try:
+                    data = json.loads(line[6:])
+                except json.JSONDecodeError:
+                    continue
                 if data == "[DONE]":
                     break
                 if data.startswith("[ERROR]"):

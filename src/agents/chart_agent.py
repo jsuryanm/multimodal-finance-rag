@@ -320,6 +320,7 @@ class ChartAgent:
         ])
 
         chain = self.vision_llm | JsonOutputParser()
+        
         result = await chain.ainvoke([message])
 
         try:
