@@ -1,19 +1,24 @@
 from __future__ import annotations
 import base64
 import json
+import re
 import uuid
 from pathlib import Path
 
 import fitz
+import pymupdf4llm
 
 # Suppress non-fatal MuPDF warnings (colour-space errors, structure-tree noise).
 # These are cosmetic — they don't affect extraction quality.
 fitz.TOOLS.mupdf_display_errors(False)
 
+# Stick with the classic pymupdf_rag backend rather than the newer layout engine.
+# It's more stable for financial PDFs and has well-documented output structure
+# (each page_chunk dict contains: metadata, toc_items, tables, images, graphics, text, words).
+pymupdf4llm.use_layout(False)
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
-from langchain_community.document_loaders import UnstructuredPDFLoader
-from langchain_community.vectorstores.utils import filter_complex_metadata
 
 from src.settings.config import settings
 from src.exceptions.custom_exceptions import PDFProcessingError
@@ -26,15 +31,18 @@ class PDFProcessor:
 
     Responsibilities:
     1. Save the uploaded PDF to disk under a session folder
-    2. Extract text → split into LangChain Document chunks
+    2. Extract text as markdown (tables preserved inline) → LangChain Document chunks
     3. Render each page as a PNG image (used by the chart agent)
-    4. Detect which pages likely contain charts or tables
+    4. Detect which pages contain charts or tables and label them with captions
     """
 
     def __init__(self, session_id: str | None = None):
         self.session_id = session_id or str(uuid.uuid4())
         self.session_dir = settings.DATA_DIR / self.session_id
         self.session_dir.mkdir(parents=True, exist_ok=True)
+        # Cached page_chunks output from pymupdf4llm — populated by extract_documents()
+        # and reused by detect_chart_pages() to avoid re-parsing the PDF.
+        self._page_chunks: list[dict] | None = None
 
     # ── Step 1: Save ──────────────────────────────────────────────────────────
 
@@ -49,36 +57,45 @@ class PDFProcessor:
 
     def extract_documents(self, pdf_path: Path) -> list[Document]:
         """
-        Load the PDF and split it into text chunks for vector indexing.
+        Extract per-page markdown (tables preserved inline) and split into chunks.
 
-        Uses UnstructuredPDFLoader with strategy="fast" (pdfminer backend) which
-        gives semantically coherent units — paragraphs, titles, tables — before
-        chunking. This avoids arbitrary mid-sentence splits.
-
-        Metadata note: Unstructured uses 1-indexed 'page_number'. We add a
-        0-indexed 'page' alias so the rest of the codebase stays consistent.
+        Uses pymupdf4llm.to_markdown(page_chunks=True) which returns a list of
+        page dicts: {metadata, toc_items, tables, images, graphics, text, words}.
+        The text field is markdown — headings become '#', tables become pipe-
+        separated rows — so table values survive chunking and can be retrieved
+        from the vector store by the summary agent.
         """
         try:
-            loader = UnstructuredPDFLoader(
+            page_chunks = pymupdf4llm.to_markdown(
                 str(pdf_path),
-                mode="elements",
-                strategy="fast",  # pdfminer only — no OCR or detectron2 needed
+                page_chunks=True,
+                show_progress=False,
             )
-            docs = loader.load()
         except Exception as e:
             raise PDFProcessingError(f"Cannot load PDF: {pdf_path.name}", detail=str(e))
 
-        # Unstructured adds rich nested metadata (coordinates, layout dicts) that
-        # ChromaDB cannot store. Strip anything that isn't a primitive type.
-        docs = filter_complex_metadata(docs)
+        # Cache for detect_chart_pages() so we don't re-parse the PDF
+        self._page_chunks = page_chunks
 
-        # Add 0-indexed 'page' for backward compatibility with retrieval code
-        for doc in docs:
-            if "page_number" in doc.metadata and "page" not in doc.metadata:
-                doc.metadata["page"] = doc.metadata["page_number"] - 1
-
-        # Drop empty elements (headers, footers, blank lines)
-        docs = [doc for doc in docs if doc.page_content.strip()]
+        # Build one LangChain Document per page. Keep metadata primitive so
+        # ChromaDB can store it — no nested dicts or coordinate arrays.
+        docs: list[Document] = []
+        for chunk in page_chunks:
+            text = chunk.get("text", "").strip()
+            if not text:
+                continue
+            page_0 = chunk["metadata"].get("page", 0)  # pymupdf4llm uses 0-indexed
+            docs.append(
+                Document(
+                    page_content=text,
+                    metadata={
+                        "source": str(pdf_path),
+                        "page": page_0,              # 0-indexed — matches existing retrieval code
+                        "page_number": page_0 + 1,   # 1-indexed — matches page_images/page_N.png
+                        "has_tables": len(chunk.get("tables", [])) > 0,
+                    },
+                )
+            )
 
         if not docs:
             raise PDFProcessingError(
@@ -93,13 +110,12 @@ class PDFProcessor:
         )
         chunks = splitter.split_documents(docs)
 
-        # Drop chunks that are too short to be meaningful (page numbers, headers)
+        # Drop chunks too short to be meaningful (page numbers, headers, footers)
         chunks = [c for c in chunks if len(c.page_content.strip()) > 50]
 
         logger.info(
             f"Extracted {len(chunks)} chunks from {pdf_path.name} "
-            f"({len(docs)} elements, "
-            f"{len({d.metadata.get('page_number') for d in docs})} pages)"
+            f"({len(docs)} pages, {sum(1 for d in docs if d.metadata['has_tables'])} with tables)"
         )
         return chunks
 
@@ -107,10 +123,11 @@ class PDFProcessor:
 
     def extract_page_images(self, pdf_path: Path) -> list[Path]:
         """
-        Render every PDF page as a PNG at 2x resolution.
+        Render every PDF page as a PNG at 3x resolution (~216 DPI).
 
-        These images are used by the chart agent to send pages to a vision LLM.
-        Stored at: data/<session_id>/page_images/page_N.png  (1-indexed)
+        Higher DPI than before so small chart numbers and table values survive
+        for the vision LLM. Stored at:
+            data/<session_id>/page_images/page_N.png  (1-indexed)
         """
         try:
             doc = fitz.open(str(pdf_path))
@@ -124,8 +141,9 @@ class PDFProcessor:
         image_paths: list[Path] = []
 
         for page_num in range(len(doc)):
-            # Matrix(2, 2) = 2x scale → ~144 DPI, clear enough for chart reading
-            pix = doc[page_num].get_pixmap(matrix=fitz.Matrix(2, 2), colorspace=fitz.csRGB)
+            # Matrix(3, 3) = 3x scale → ~216 DPI. Costs ~2x disk vs 2x but makes
+            # small numbers in charts/tables legible to the vision LLM.
+            pix = doc[page_num].get_pixmap(matrix=fitz.Matrix(3, 3), colorspace=fitz.csRGB)
             img_path = images_dir / f"page_{page_num + 1}.png"
             pix.save(str(img_path))
             image_paths.append(img_path)
@@ -136,42 +154,115 @@ class PDFProcessor:
 
     # ── Step 4: Detect chart pages ────────────────────────────────────────────
 
-    def detect_chart_pages(self, pdf_path: Path) -> list[int]:
+    def detect_chart_pages(self, pdf_path: Path) -> list[dict]:
         """
-        Scan each page and return 1-indexed page numbers that likely contain
-        charts, graphs, or tables.
+        Identify pages that contain charts, graphs, or tables, and label each
+        one with a caption drawn from the nearest markdown heading or bold line.
 
-        Heuristics:
-        - Page contains embedded raster images → likely a chart screenshot or photo
-        - Page has more than 5 vector drawing operations → likely table borders or chart axes
+        Signals:
+        - `page_chunk['tables']` — real tables detected by pymupdf4llm (not a
+          drawing-ops heuristic). Any page with ≥1 table counts.
+        - `page_chunk['images']` — embedded raster images. Filtered to only
+          include "meaningful" ones (i.e. pages that also have non-trivial text
+          or graphics), which filters out decorative cover-page images.
+        - `page_chunk['graphics']` — vector drawings. ≥10 suggests a chart.
 
-        Results are saved to chart_pages.json so the chart agent can look up
-        relevant pages without re-opening the PDF on every request.
+        Output shape (saved to chart_pages.json, 1-indexed page numbers):
+            [
+                {
+                    "page": 5,
+                    "tables": 2,
+                    "images": 1,
+                    "graphics": 14,
+                    "caption": "Revenue by segment FY2024"
+                },
+                ...
+            ]
         """
-        try:
-            doc = fitz.open(str(pdf_path))
-        except Exception as e:
-            raise PDFProcessingError(
-                f"Cannot open PDF for chart detection: {pdf_path.name}", detail=str(e)
+        # Reuse cached chunks from extract_documents() if available,
+        # otherwise re-parse (e.g. when called standalone in tests).
+        if self._page_chunks is not None:
+            page_chunks = self._page_chunks
+        else:
+            try:
+                page_chunks = pymupdf4llm.to_markdown(
+                    str(pdf_path),
+                    page_chunks=True,
+                    show_progress=False,
+                )
+            except Exception as e:
+                raise PDFProcessingError(
+                    f"Cannot open PDF for chart detection: {pdf_path.name}",
+                    detail=str(e),
+                )
+
+        chart_pages: list[dict] = []
+        for chunk in page_chunks:
+            tables = chunk.get("tables") or []
+            images = chunk.get("images") or []
+            graphics = chunk.get("graphics") or []
+            text = chunk.get("text", "") or ""
+
+            has_table = len(tables) > 0
+            has_meaningful_image = len(images) > 0 and len(text.strip()) > 100
+            has_complex_graphics = len(graphics) >= 10  # likely chart axes/bars
+
+            if not (has_table or has_meaningful_image or has_complex_graphics):
+                continue
+
+            page_1 = chunk["metadata"].get("page", 0) + 1  # store 1-indexed
+            caption = self._extract_caption(text, page_1)
+
+            chart_pages.append(
+                {
+                    "page": page_1,
+                    "tables": len(tables),
+                    "images": len(images),
+                    "graphics": len(graphics),
+                    "caption": caption,
+                }
             )
 
-        chart_pages: list[int] = []
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            has_images = len(page.get_images()) > 0
-            has_drawings = len(page.get_drawings()) > 5  # table lines, chart axes
-            if has_images or has_drawings:
-                chart_pages.append(page_num + 1)  # store as 1-indexed
-
-        doc.close()
-
         chart_pages_path = self.session_dir / "chart_pages.json"
-        chart_pages_path.write_text(json.dumps(chart_pages))
+        chart_pages_path.write_text(json.dumps(chart_pages, indent=2))
         logger.info(
             f"Detected {len(chart_pages)} chart pages in {pdf_path.name} "
             f"(saved to {chart_pages_path})"
         )
         return chart_pages
+
+    # ── Caption helper ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _extract_caption(markdown_text: str, page_number: int) -> str:
+        """
+        Pick a human-readable caption for a chart page from its markdown text.
+
+        Priority:
+        1. First markdown heading (`# ...`, `## ...`) on the page.
+        2. First **bold** line.
+        3. First non-empty line that looks like a title (<80 chars, no pipes).
+        4. Generic fallback: "Page {N}".
+        """
+        lines = [ln.strip() for ln in markdown_text.splitlines() if ln.strip()]
+
+        for ln in lines:
+            m = re.match(r"^#{1,6}\s+(.+?)\s*#*$", ln)
+            if m:
+                return m.group(1).strip()[:120]
+
+        for ln in lines:
+            m = re.match(r"^\*\*(.+?)\*\*\s*$", ln)
+            if m:
+                return m.group(1).strip()[:120]
+
+        for ln in lines:
+            if "|" in ln or ln.startswith("-") or ln.startswith("```"):
+                continue
+            if 3 < len(ln) < 80:
+                return ln[:120]
+
+        return f"Page {page_number}"
 
     # ── Utility ───────────────────────────────────────────────────────────────
 
@@ -179,3 +270,32 @@ class PDFProcessor:
     def image_to_base64(image_path: Path) -> str:
         """Read a PNG file and return its base64 string for vision LLM APIs."""
         return base64.b64encode(image_path.read_bytes()).decode("utf-8")
+
+
+if __name__ == "__main__":
+    import sys
+
+    pdf_arg = sys.argv[1] if len(sys.argv) > 1 else None
+    if not pdf_arg:
+        # Pick the first PDF we can find under data/ for a smoke test
+        for p in sorted(settings.DATA_DIR.glob("*/*.pdf")):
+            pdf_arg = str(p)
+            break
+    if not pdf_arg:
+        print("Usage: python -m src.core.pdf_processor <pdf_path>")
+        sys.exit(1)
+
+    proc = PDFProcessor()
+    path = Path(pdf_arg)
+    chunks = proc.extract_documents(path)
+    chart_pages = proc.detect_chart_pages(path)
+    print(f"chunks: {len(chunks)}")
+    print(f"chart pages: {len(chart_pages)}")
+    for cp in chart_pages[:5]:
+        print(f"  p{cp['page']:>3}  tables={cp['tables']}  images={cp['images']}  graphics={cp['graphics']}  -> {cp['caption']}")
+    # Show one chunk that contains a markdown table to verify table preservation
+    for c in chunks:
+        if "|" in c.page_content and "---" in c.page_content:
+            print("\n--- sample chunk with table ---")
+            print(c.page_content[:600])
+            break

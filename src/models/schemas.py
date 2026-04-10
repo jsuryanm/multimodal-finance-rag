@@ -1,6 +1,6 @@
-from __future__ import annotations 
-from pydantic import BaseModel,Field 
-from typing import Optional 
+from __future__ import annotations
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional
 
 # Agent Outputs
 
@@ -35,8 +35,16 @@ class FinancialSummary(BaseModel):
     yoy_growth: Optional[str] = Field(default=None,
                                       description="Year-over-year growth percentage for key percentage")
     
-    key_risks: Optional[str] = Field(default=None,description="Main risk factors mentioned") 
-    
+    key_risks: Optional[str] = Field(default=None, description="Main risk factors mentioned")
+
+    @field_validator("key_risks", mode="before")
+    @classmethod
+    def coerce_key_risks(cls, v):
+        """LLMs sometimes return key_risks as a list. Join it into a single string."""
+        if isinstance(v, list):
+            return "\n".join(f"- {item}" for item in v)
+        return v
+
     summary: Optional[str] = Field(description="2-3 sentence analyst style summary of the financial performance")
 
 

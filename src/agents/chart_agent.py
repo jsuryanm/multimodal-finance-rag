@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import json
+import re
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import JsonOutputParser
@@ -24,45 +25,100 @@ class ChartAgent:
     async def _find_best_chart_page(self, question: str, session_id: str) -> int:
         """Return the most question-relevant chart page for this session.
 
+        chart_pages.json now stores rich entries:
+            [{"page": 5, "tables": 2, "images": 1, "graphics": 14,
+              "caption": "Revenue by segment FY2024"}, ...]
+
         Strategy:
-        1. Load the pre-computed chart_pages.json (built at upload time by PDFProcessor).
-        2. Run a ChromaDB MMR retrieval with the user's question to find text-relevant pages.
-           PyPDFLoader stores 0-indexed 'page' metadata; add 1 to convert to 1-indexed.
-        3. Return the first chart page that also appears in the ChromaDB results.
-        4. If no overlap, return the first chart page overall.
-        5. If chart_pages.json is missing, fall back to page 1.
+        1. Load chart_pages.json. If missing or empty, raise — don't silently
+           guess page 1 (old behaviour masked failures).
+        2. Score each chart page by caption/question keyword overlap and pick
+           the top-scoring page.
+        3. If no caption keywords match, fall back to ChromaDB MMR retrieval ∩
+           chart pages and return the first intersection.
+        4. Final fallback: the chart page with the most tables+graphics (i.e.
+           the most visually dense page), not just the first entry.
         """
         chart_pages_path = settings.DATA_DIR / session_id / "chart_pages.json"
 
         if not chart_pages_path.exists():
-            logger.warning(f"chart_pages.json not found for session {session_id} — defaulting to page 1")
-            return 1
+            raise AgentError(
+                f"chart_pages.json not found for session {session_id}",
+                detail="The PDF was not processed with the current pipeline. Re-upload the PDF.",
+            )
 
-        chart_pages: list[int] = json.loads(chart_pages_path.read_text())
+        chart_pages: list[dict] = json.loads(chart_pages_path.read_text())
         if not chart_pages:
-            logger.warning(f"No chart pages detected for session {session_id} — defaulting to page 1")
-            return 1
+            raise AgentError(
+                f"No charts, graphs, or tables detected in session {session_id}",
+                detail="The uploaded PDF contains no visual elements the chart agent can analyse.",
+            )
 
-        # Use ChromaDB to find text-relevant pages, then intersect with chart pages
+        # 1) Caption keyword ranking — cheap, deterministic, no extra LLM call.
+        best = self._rank_by_caption(question, chart_pages)
+        if best is not None:
+            logger.info(
+                f"Chart page {best['page']} selected by caption match "
+                f"('{best['caption']}') for session {session_id}"
+            )
+            return best["page"]
+
+        # 2) Fall back to ChromaDB MMR ∩ chart pages.
         try:
             store = VectorStore(session_id=session_id)
             retriever = store.get_retriever(search_type="mmr", k=10)
             docs = await asyncio.to_thread(retriever.invoke, question)
-
-            # PyPDFLoader page metadata is 0-indexed → convert to 1-indexed
-            retrieved_pages = {doc.metadata.get("page", 0) + 1 for doc in docs}
-            relevant_chart_pages = [p for p in chart_pages if p in retrieved_pages]
-
-            if relevant_chart_pages:
-                chosen = relevant_chart_pages[0]
-                logger.info(f"Auto-detected chart page {chosen} (ChromaDB+heuristic) for session {session_id}")
+            chart_page_numbers = {cp["page"] for cp in chart_pages}
+            overlap = [p for p in (doc.metadata.get("page", 0) + 1 for doc in docs) if p in chart_page_numbers]
+            if overlap:
+                chosen = overlap[0]
+                logger.info(f"Chart page {chosen} selected by ChromaDB overlap for session {session_id}")
                 return chosen
-
         except Exception as e:
-            logger.warning(f"ChromaDB chart page detection failed: {e} — falling back to first chart page")
+            logger.warning(f"ChromaDB chart page detection failed: {e} — using visual-density fallback")
 
-        logger.info(f"Using first known chart page {chart_pages[0]} for session {session_id}")
-        return chart_pages[0]
+        # 3) Visual-density fallback: pick the most table/graphics-heavy page.
+        densest = max(chart_pages, key=lambda cp: cp.get("tables", 0) * 3 + cp.get("graphics", 0))
+        logger.info(
+            f"Chart page {densest['page']} selected by visual density "
+            f"(tables={densest.get('tables', 0)}, graphics={densest.get('graphics', 0)}) "
+            f"for session {session_id}"
+        )
+        return densest["page"]
+
+    @staticmethod
+    def _rank_by_caption(question: str, chart_pages: list[dict]) -> dict | None:
+        """Score chart pages by token overlap between caption and question.
+
+        Returns the best-matching entry, or None if no caption shares any
+        non-stopword token with the question.
+        """
+        stop = {
+            "the", "a", "an", "of", "in", "on", "for", "to", "and", "or", "is",
+            "are", "was", "were", "show", "what", "which", "whats", "where",
+            "how", "me", "my", "our", "their", "this", "that", "these", "those",
+            "chart", "graph", "table", "describe", "explain",
+        }
+
+        def tokens(text: str) -> set[str]:
+            return {t for t in re.findall(r"[a-z0-9]+", (text or "").lower()) if t not in stop and len(t) > 2}
+
+        q_tokens = tokens(question)
+        if not q_tokens:
+            return None
+
+        best_score = 0
+        best_entry: dict | None = None
+        for cp in chart_pages:
+            score = len(q_tokens & tokens(cp.get("caption", "")))
+            # Tiebreaker: prefer pages with more tables
+            score = score * 10 + cp.get("tables", 0)
+            if score > best_score:
+                best_score = score
+                best_entry = cp
+
+        # Require at least one caption keyword match (score >= 10 after the *10 bump)
+        return best_entry if best_score >= 10 else None
 
     async def load_image_node(self, state: FinanceAgentState) -> dict:
         session_id = state["session_id"]

@@ -71,7 +71,7 @@ class SummaryAgent:
                     "QUESTION: {question}\n\n"
                     "Respond with a JSON object matching FinancialSummary schema."
                     "CRITICAL: No markdown code blocks, no backticks, no preamble."
-                    "Response must start with { and end with }."
+                    "Response must start with {{ and end with }}."
                 ))
         ])
 

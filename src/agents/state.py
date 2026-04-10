@@ -33,10 +33,5 @@ class FinanceAgentState(MessagesState):
     # long term memory
     long_term_summary: Optional[str] = None
 
-    # Fan-out collectors — reducer allows parallel agent branches to write without conflict
-    # Each item in partial_answers: {"route": str, "text": str}
-    partial_answers: Annotated[list[dict], add] = []
-    active_routes: Annotated[list[str], add] = []
-
     # conversation summaries
     summaries: Annotated[list[str], add] = []

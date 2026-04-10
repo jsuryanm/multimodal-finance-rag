@@ -18,10 +18,10 @@ OrchestratorAgent (LangGraph StateGraph)
     ├── load_memory   → load prior Q&A context from SQLite
     ├── route         → LLM classifies intent → one of 4 routes
     │
-    ├── summary       → SummaryAgent   (ChromaDB RAG → structured JSON answer)
-    ├── chart         → ChartAgent     (page image → vision LLM → chart analysis)
+    ├── summary       → SummaryAgent    (ChromaDB RAG → structured JSON answer)
+    ├── chart         → ChartAgent      (page image → vision LLM → chart analysis)
     ├── comparision   → ComparsionAgent (dual ChromaDB RAG → side-by-side table)
-    └── stock_price   → MCP tool call  (yfinance via stdio MCP server)
+    └── stock_price   → StockAgent      (LangChain ReAct agent → MCP tools → yfinance / Tavily)
     │
     └── save_memory   → append Q&A to SQLite long-term memory
 ```
@@ -34,20 +34,26 @@ OrchestratorAgent (LangGraph StateGraph)
 
 | Path | Purpose |
 |------|---------|
-| `src/agents/orchestrator_agent.py` | Main LangGraph graph, routing logic, MCP connection |
-| `src/agents/state.py` | `FinanceAgentState` TypedDict (shared state across all nodes) |
+| `src/agents/orchestrator_agent.py` | Main LangGraph graph, routing logic, MCP connection, streaming |
+| `src/agents/state.py` | `FinanceAgentState` (extends `MessagesState`) — shared state across all nodes |
 | `src/agents/summary_agent.py` | RAG pipeline: retrieve → generate structured financial summary |
 | `src/agents/chart_agent.py` | Vision LLM pipeline: load page image → analyze charts/tables |
 | `src/agents/comparision_agent.py` | Dual-document RAG for company comparison |
-| `src/core/pdf_processor.py` | PDF → text chunks + page PNG images |
+| `src/agents/stock_agent.py` | LangChain v1 `create_agent` ReAct loop; wraps MCP tools as LangChain `Tool`s |
+| `src/core/pdf_processor.py` | PDF → markdown text chunks (tables preserved inline via `pymupdf4llm`) + page PNG images at 3× scale + chart-page detection with captions |
 | `src/core/embeddings.py` | `QwenVLEmbeddings` + `get_qwen_embeddings()` singleton (pre-loaded at startup) |
 | `src/core/vector_store.py` | ChromaDB collection build/load/retrieve (one collection per session) |
 | `src/memory/long_term.py` | SQLite-backed long-term memory (per session Q&A summaries) |
 | `src/memory/checkpoint.py` | LangGraph SQLite checkpointer (full graph state) |
 | `src/mcp_server/server.py` | FastMCP server: `get_stock_price` + `search_financial_news` |
 | `src/models/schemas.py` | Pydantic schemas: `RouterDecision`, `FinancialSummary`, `ChartAnalysis`, `ComparisionSummary` |
-| `src/settings/config.py` | Pydantic settings from `.env`; `get_llm()`, `get_vision_llm()` |
-| `backend/app.py` | FastAPI: `/health`, `/upload` (PDF→ChromaDB index), `/chat/stream` (SSE), exception handlers |
+| `src/prompts/` | System prompts for each agent |
+| `src/exceptions/custom_exceptions.py` | `FinDocBaseException` hierarchy: `AgentError`, `OrchestratorError`, `VectorStoreError`, `PDFProcessingError` |
+| `src/logger/custom_logger.py` | Shared `logger` (writes to `app.log`) |
+| `src/settings/config.py` | Pydantic settings from `.env`; cached `get_llm()` / `get_vision_llm()` |
+| `backend/app.py` | FastAPI: `lifespan` warm-up, `/health`, `/upload` (PDF→ChromaDB index), `/chat/stream` (SSE), exception handler |
+| `backend/models/api_schemas.py` | `UploadResponse`, `ChatRequest` request/response models |
+| `frontend/` | Frontend client (served separately from the FastAPI backend) |
 
 ---
 
@@ -122,6 +128,16 @@ Set `LLM_PROVIDER` in `.env`:
 
 5. **MCP client:** `MultiServerMCPClient` is instantiated without `async with`. The tools returned by `get_tools()` maintain their connection. Do not wrap in `async with` unless the library version requires it.
 
-6. **`MAX_TOKENS=2000`** — default is 2000; comparison responses require this much for full JSON output. Increase in `.env` only if answers are still truncated.
+6. **`MAX_TOKENS=4000`** — default in `src/settings/config.py`. Comparison responses need ≥2000 for full JSON output; 4000 gives headroom. Override in `.env` if needed.
 
 7. **Embedding model cold start:** FastAPI lifespan pre-loads Qwen3-VL via `asyncio.to_thread` (~30s on CPU, faster on GPU). The first upload will not block if the lifespan warm-up has completed.
+
+8. **`StockAgent` is a ReAct agent, not a direct MCP call.** It uses `langchain.agents.create_agent` with MCP tools wrapped as LangChain `Tool`s (see `convert_mcp_tools` in `src/agents/stock_agent.py`). The LLM decides whether to call `get_stock_price` or `search_financial_news`. Do not bypass it with a direct tool call — the ReAct loop handles ticker extraction and error recovery.
+
+9. **`orchestrator.stream()` is not token-by-token.** All four agents output structured JSON, so the orchestrator runs each agent to completion via `ainvoke`, then yields a `[ROUTE:<name>]` badge followed by the full answer string. Do not rewire to `astream_events` without a plan for suppressing raw JSON tokens in the UI.
+
+10. **`_decide_route` overrides the LLM.** If `session_id_b` is set, the route is forced to `"comparision"` regardless of what the router LLM picks. If the LLM picks `"comparision"` but `session_id_b` is missing, it falls back to `"summary"`. Tests that assert routing behavior must account for this.
+
+11. **Tables live in the RAG index, not the chart agent.** `PDFProcessor.extract_documents()` uses `pymupdf4llm.to_markdown(page_chunks=True)` which preserves tables as markdown pipe rows inside the chunked text. This means the summary agent can answer numeric table questions directly via ChromaDB retrieval — you should not route table lookups through the chart agent. The chart agent is for genuinely visual content (bar charts, line graphs, diagrams) that the vision LLM must see.
+
+12. **`chart_pages.json` schema.** Written by `PDFProcessor.detect_chart_pages()`. Format: `[{"page": int (1-indexed), "tables": int, "images": int, "graphics": int, "caption": str}]`. The caption is extracted from the first markdown heading / bold line on the page and is what `ChartAgent._find_best_chart_page()` ranks against the user question. Old sessions uploaded before this change have a flat `[int, int, ...]` schema and will break the chart agent — re-upload them.
