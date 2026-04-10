@@ -49,10 +49,12 @@ class Settings(BaseSettings):
 
     # paths
     DATA_DIR: Path = Path("data")
-    FAISS_DIR: Path = Path("faiss_index")
     CHROMA_DIR: Path = Path("chroma_index")
     SQLITE_MEMORY_DB: Path = Path("data/memory.db")
     SQLITE_CHECKPOINT: Path = Path("data/checkpoints.db")
+
+    PDF_OCR_ENABLED: bool = False
+
 
 
     # Timeout in seconds for LLM / agent node calls

@@ -78,7 +78,8 @@ class ChartAgent:
             logger.warning(f"ChromaDB chart page detection failed: {e} — using visual-density fallback")
 
         # 3) Visual-density fallback: pick the most table/graphics-heavy page.
-        densest = max(chart_pages, key=lambda cp: cp.get("tables", 0) * 3 + cp.get("graphics", 0))
+        densest = max(chart_pages, key=lambda cp: cp.get("tables", 0) * 3 + cp.get("figures", 0) + cp.get("vector_charts", 0) // 10)
+
         logger.info(
             f"Chart page {densest['page']} selected by visual density "
             f"(tables={densest.get('tables', 0)}, graphics={densest.get('graphics', 0)}) "
@@ -112,7 +113,8 @@ class ChartAgent:
         for cp in chart_pages:
             score = len(q_tokens & tokens(cp.get("caption", "")))
             # Tiebreaker: prefer pages with more tables
-            score = score * 10 + cp.get("tables", 0)
+            score = score * 10 + cp.get("tables", 0) * 3 + min(cp.get("vector_charts", 0) // 10, 3)
+
             if score > best_score:
                 best_score = score
                 best_entry = cp

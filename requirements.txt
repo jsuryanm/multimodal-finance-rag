@@ -27,6 +27,7 @@ sentence-transformers
 
 huggingface_hub[hf_xet]
 PyMuPDF
+docling
 pypdf
 
 fastapi
