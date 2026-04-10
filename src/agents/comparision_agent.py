@@ -112,7 +112,9 @@ class ComparsionAgent:
                     "route":"comparision"}
         
         except Exception as e: 
-            raise AgentError("ComparisionAgent execution failed",detail=str(e))
+            logger.error(f"ComparsionAgent failed: {e} | detail: {getattr(e, 'detail', '')}")
+        raise AgentError("ComparsionAgent execution failed", detail=str(e))
+
         
     async def stream(self,state: FinanceAgentState):
         try:

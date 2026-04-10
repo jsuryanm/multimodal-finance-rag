@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     EMBEDDING_DEVICE: str = "auto"
 
     # Maximum completion tokens (comparison responses need 2000+ for full JSON)
-    MAX_TOKENS: int = 2000
+    MAX_TOKENS: int = 4000
 
     # RAG dettings 
     CHUNK_SIZE: int = 1000 

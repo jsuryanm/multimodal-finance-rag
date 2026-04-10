@@ -6,13 +6,13 @@ import streamlit as st
 API_URL = "http://localhost:8000"
 
 ROUTE_BADGES = {
-    "summary":     ("📄", "summary",    "#1f6feb"),
-    "chart":       ("🖼",  "chart",      "#8957e5"),
-    "comparision": ("⚖️", "comparision","#f0883e"),
-    "stock_price": ("📈", "stock_price","#3fb950"),
+    "summary":     ("📄", "summary",     "#1f6feb"),
+    "chart":       ("🖼",  "chart",       "#8957e5"),
+    "comparision": ("⚖️", "comparision", "#f0883e"),
+    "stock_price": ("📈", "stock_price", "#3fb950"),
 }
 
-# session state defaults 
+
 def _init_state():
     defaults = {
         "session_id": None,
@@ -20,14 +20,12 @@ def _init_state():
         "uploaded_filename_a": None,
         "uploaded_filename_b": None,
         "messages": [],
-        "page_number": 1,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = val
 
 
-#  backend health check 
 def _check_backend() -> bool:
     try:
         r = requests.get(f"{API_URL}/health", timeout=3)
@@ -36,13 +34,13 @@ def _check_backend() -> bool:
         return False
 
 
-# ── sidebar ───────────────────────────────────────────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+
 def _render_sidebar():
     with st.sidebar:
         st.title("📊 Finance RAG")
         st.divider()
 
-        # Company A upload
         st.markdown("**Company A**")
         file_a = st.file_uploader(
             "Upload annual report PDF",
@@ -59,7 +57,6 @@ def _render_sidebar():
 
         st.divider()
 
-        # Company B upload
         st.markdown("**Company B** *(optional — enables comparison)*")
         file_b = st.file_uploader(
             "Upload second PDF",
@@ -76,23 +73,11 @@ def _render_sidebar():
 
         st.divider()
 
-        # Chart page number
-        st.markdown("**Chart page**")
-        st.session_state.page_number = st.number_input(
-            "Page number for chart analysis",
-            min_value=1,
-            value=st.session_state.page_number,
-            label_visibility="collapsed",
-        )
-
-        st.divider()
-
         if st.button("🗑 Clear Chat", use_container_width=True):
             st.session_state.messages = []
             st.rerun()
 
 
-# upload helper 
 def _upload_file(file, slot: str):
     with st.sidebar:
         with st.spinner(f"Indexing {file.name}…"):
@@ -112,28 +97,22 @@ def _upload_file(file, slot: str):
                     st.session_state.uploaded_filename_b = file.name
                 st.success(f"✓ {file.name} — {data['chunks']} chunks, {data['pages']} pages")
             except requests.exceptions.HTTPError as e:
-                try:
-                    detail = e.response.json().get("detail", str(e))
-                except Exception:
-                    detail = str(e)
+                detail = e.response.json().get("detail", str(e)) if e.response else str(e)
                 st.error(f"Upload failed: {detail}")
             except requests.exceptions.ReadTimeout:
-                st.error(
-                    "Upload timed out — the PDF is large and indexing is still running. "
-                    "Try uploading a smaller file, or wait and refresh the page."
-                )
+                st.error("Upload timed out — try a smaller file or wait and refresh.")
             except requests.exceptions.ConnectionError:
                 st.error("Cannot reach backend. Is it running?")
 
 
-# ── chat history ──────────────────────────────────────────────────────────────
+# ── Chat ──────────────────────────────────────────────────────────────────────
+
 def _render_chat():
     for msg in st.session_state.messages:
         role = msg["role"]
         with st.chat_message(role):
             if role == "assistant" and msg.get("route"):
-                route = msg["route"]
-                emoji, label, color = ROUTE_BADGES.get(route, ("🤖", route, "#8b949e"))
+                emoji, label, color = ROUTE_BADGES.get(msg["route"], ("🤖", msg["route"], "#8b949e"))
                 st.markdown(
                     f'<span style="font-size:11px;background:#21262d;'
                     f'border:1px solid #30363d;border-radius:10px;'
@@ -143,13 +122,12 @@ def _render_chat():
             st.markdown(msg["content"])
 
 
-# ── streaming chat ────────────────────────────────────────────────────────────
 def _stream_answer(question: str):
+    # page_number is no longer sent — the chart agent auto-detects the best page
     payload = {
         "session_id": st.session_state.session_id,
         "session_id_b": st.session_state.session_id_b,
         "question": question,
-        "page_number": st.session_state.page_number,
     }
 
     route = "summary"
@@ -186,7 +164,8 @@ def _stream_answer(question: str):
     })
 
 
-# main 
+# ── Main ──────────────────────────────────────────────────────────────────────
+
 def main():
     st.set_page_config(page_title="Finance RAG", page_icon="📊", layout="wide")
     _init_state()

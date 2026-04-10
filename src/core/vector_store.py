@@ -4,6 +4,7 @@ from pathlib import Path
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
+from langchain_community.vectorstores.utils import filter_complex_metadata
 
 from src.core.embeddings import get_qwen_embeddings
 from src.exceptions.custom_exceptions import VectorStoreError
@@ -30,6 +31,8 @@ class VectorStore:
         """
         if not documents:
             raise VectorStoreError("No documents provided for indexing")
+        
+        documents = filter_complex_metadata(documents)
 
         filtered = [d for d in documents if len(d.page_content.strip()) > 50]
         if not filtered:
