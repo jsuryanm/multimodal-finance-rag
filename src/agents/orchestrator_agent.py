@@ -95,6 +95,7 @@ class OrchestratorAgent:
             "BEEN", "THEIR", "THEY", "THAN", "MORE", "YEAR", "WHAT",
             "GIVE", "TELL", "SHOW", "DOES", "INTO", "OVER", "ALSO",
             "BOTH", "EACH", "MUCH", "SOME", "SUCH", "THEN", "THERE",
+            "EBIT", "EBITDA", "EPS", "ROE", "ROA", "NPV", "IRR", "DCF", "CAGR", "NAV", "NTA", "IPO", "SGX", "YOY", "QOQ", "MOM",
         }
         upper_matches = re.findall(r"\b[A-Z]{2,5}\b", question)
         for word in upper_matches:
@@ -123,6 +124,7 @@ class OrchestratorAgent:
             "BEEN", "THEIR", "THEY", "THAN", "MORE", "YEAR", "WHAT",
             "GIVE", "TELL", "SHOW", "DOES", "INTO", "OVER", "ALSO",
             "BOTH", "EACH", "MUCH", "SOME", "SUCH", "THEN", "THERE",
+            "EBIT", "EBITDA", "EPS", "ROE", "ROA", "NPV", "IRR", "DCF", "CAGR", "NAV", "NTA", "IPO", "SGX", "YOY", "QOQ", "MOM",
         }
         return any(
             word not in NOT_TICKERS
