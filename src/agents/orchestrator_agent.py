@@ -16,7 +16,7 @@ from src.agents.comparision_agent import ComparsionAgent
 from src.memory.checkpoint import get_checkpointer
 from src.memory.long_term import get_long_term_memory
 from src.models.schemas import RouterDecision
-from src.settings.config import get_llm
+from src.settings.config import get_llm, settings
 from src.logger.custom_logger import logger 
 from src.exceptions.custom_exceptions import OrchestratorError
 
@@ -90,7 +90,11 @@ class OrchestratorAgent:
 
         NOT_TICKERS = {
             "THE", "AND", "FOR", "ARE", "DID", "CAN", "NOT", "GET",
-            "ITS", "WAS", "HAS", "HAD", "WHAT", "WHEN", "HOW"
+            "ITS", "WAS", "HAS", "HAD", "WHAT", "WHEN", "HOW",
+            "WHO", "WHY", "FROM", "WITH", "THAT", "THIS", "WILL",
+            "BEEN", "THEIR", "THEY", "THAN", "MORE", "YEAR", "WHAT",
+            "GIVE", "TELL", "SHOW", "DOES", "INTO", "OVER", "ALSO",
+            "BOTH", "EACH", "MUCH", "SOME", "SUCH", "THEN", "THERE",
         }
         upper_matches = re.findall(r"\b[A-Z]{2,5}\b", question)
         for word in upper_matches:
@@ -99,6 +103,31 @@ class OrchestratorAgent:
 
         logger.warning(f"Could not extract ticker from '{question}'. Defaulting to D05.SI")
         return "D05.SI"
+
+    def _has_explicit_ticker(self, question: str) -> bool:
+        """Return True if the question contains an explicit ticker or known company name.
+
+        Uses the same three-pass logic as _extract_ticker but returns a bool so that
+        DBS (which maps to D05.SI via KNOWN_TICKERS) and the no-match fallback
+        (also D05.SI) can be distinguished.
+        """
+        if re.search(r"\b[A-Z0-9]{2,4}\.SI\b", question, re.IGNORECASE):
+            return True
+        question_lower = question.lower()
+        if any(name in question_lower for name in self.KNOWN_TICKERS):
+            return True
+        NOT_TICKERS = {
+            "THE", "AND", "FOR", "ARE", "DID", "CAN", "NOT", "GET",
+            "ITS", "WAS", "HAS", "HAD", "WHAT", "WHEN", "HOW",
+            "WHO", "WHY", "FROM", "WITH", "THAT", "THIS", "WILL",
+            "BEEN", "THEIR", "THEY", "THAN", "MORE", "YEAR", "WHAT",
+            "GIVE", "TELL", "SHOW", "DOES", "INTO", "OVER", "ALSO",
+            "BOTH", "EACH", "MUCH", "SOME", "SUCH", "THEN", "THERE",
+        }
+        return any(
+            word not in NOT_TICKERS
+            for word in re.findall(r"\b[A-Z]{2,5}\b", question)
+        )
 
     def _format_stock_response(self, result: dict) -> str:
         """
@@ -160,15 +189,19 @@ class OrchestratorAgent:
         try:
             structured_llm = self.llm.with_structured_output(RouterDecision)
             system_content = (
-                "You are a financial query classifier. "
-                "Classify the user's LATEST question into exactly one route.\n\n"
-                "Routes (use exact spelling):\n"
-                "- summary: general financial questions about metrics (revenue, profit, EPS, risks, trends)\n"
-                "- chart: user mentions page, graph, chart, table, figure, or any visual element\n"
-                "- comparision: user asks to compare two companies (keywords: compare, versus, vs, both companies)\n"
-                "- stock_price: user asks about current or live stock price, or mentions a ticker symbol\n\n"
-                "Priority rule: stock_price and comparision ALWAYS take precedence over summary "
-                "even when financial metrics like revenue are also mentioned.\n"
+                "You are a financial query classifier. Read the user's LATEST message and classify "
+                "it into exactly one of the four routes below. Use conversation history only to "
+                "resolve context — the classification must be based on the LATEST message.\n\n"
+                "Routes (use EXACT spelling — these are code identifiers):\n"
+                "- stock_price: user asks about current/live stock price, share price, or mentions "
+                "a ticker symbol (e.g. D05.SI, OCBC, DBS, GRAB)\n"
+                "- comparision: user explicitly wants to COMPARE two companies — keywords: compare, "
+                "versus, vs, side by side, both companies\n"
+                "- chart: user asks about a specific page, or mentions chart, graph, table, figure, "
+                "or any visual element from the report\n"
+                "- summary: all other financial questions about the report (metrics, risks, "
+                "strategy, dividends, earnings, performance)\n\n"
+                "Priority when multiple routes apply: stock_price > comparision > chart > summary\n"
             )
 
             if state.get("long_term_summary"):
@@ -185,15 +218,33 @@ class OrchestratorAgent:
     
     async def _summary_node(self,state: FinanceAgentState) -> dict:
         """Delegate to SummaryAgent"""
-        return await self.summary_agent.run(state)
-    
+        try:
+            return await asyncio.wait_for(
+                self.summary_agent.run(state),
+                timeout=settings.LLM_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            raise OrchestratorError(f"SummaryAgent timed out after {settings.LLM_TIMEOUT}s")
+
     async def _chart_node(self,state: FinanceAgentState) -> dict:
-        # Delegate to ChartAgent
-        return await self.chart_agent.run(state)
-    
+        """Delegate to ChartAgent"""
+        try:
+            return await asyncio.wait_for(
+                self.chart_agent.run(state),
+                timeout=settings.LLM_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            raise OrchestratorError(f"ChartAgent timed out after {settings.LLM_TIMEOUT}s")
+
     async def _comparision_node(self,state: FinanceAgentState) -> dict:
-        # Delegate to ComparsionAgent 
-        return await self.comparision_agent.run(state)
+        """Delegate to ComparsionAgent"""
+        try:
+            return await asyncio.wait_for(
+                self.comparision_agent.run(state),
+                timeout=settings.LLM_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            raise OrchestratorError(f"ComparsionAgent timed out after {settings.LLM_TIMEOUT}s")
     
     async def _stock_price_node(self,state: FinanceAgentState) -> dict:
         """
@@ -218,7 +269,14 @@ class OrchestratorAgent:
                     "route":"stock_price",
                     "messages":[AIMessage(content=answer)]}
         
-        raw = await stock_tool.ainvoke({"ticker":ticker})
+        try:
+            raw = await asyncio.wait_for(
+                stock_tool.ainvoke({"ticker": ticker}),
+                timeout=settings.LLM_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            answer = f"Stock price lookup timed out after {settings.LLM_TIMEOUT}s"
+            return {"answer": answer, "route": "stock_price", "messages": [AIMessage(content=answer)]}
 
         # langchain_mcp_adapters returns a list of TextContent objects;
         # extract the JSON text and parse it into a dict
@@ -266,25 +324,44 @@ class OrchestratorAgent:
         logger.info(f"Saved long term memory for session: {session_id}")
         return {}
     
-    def _decide_route(self,state: FinanceAgentState) -> str:
+    def _decide_route(self, state: FinanceAgentState) -> list[str]:
         """
-        Read route from state and apply override rules.
+        Read route from state and apply override rules. Returns a list so
+        LangGraph can fan-out to multiple nodes when needed.
 
-        Override: if session_id_b is set (two PDFs uploaded),
-        force 'comparison' regardless of what the router classified.
+        Overrides (in priority order):
+        1. If session_id_b is set (two PDFs uploaded), force comparision.
+        2. If route is comparision but session_id_b is missing, fall back to summary.
+        3. Unknown routes fall back to summary.
+        4. If route is summary AND question contains an explicit ticker, fan out to
+           summary + stock_price in parallel.
         """
-        route = state.get("route","summary")
+        route = state.get("route", "summary")
 
-        if state.get("session_id_b") and route in ("summary","comparision"):
-            logger.info("session_id_b detected forcing comparision route")
-            return "comparision"
-        
-        valid_routes = {"summary","chart","comparision","stock_price"}
+        if state.get("session_id_b") and route in ("summary", "comparision"):
+            logger.info("session_id_b detected — forcing comparision route")
+            return ["comparision"]
+
+        if route == "comparision" and not state.get("session_id_b"):
+            logger.warning(
+                "Route 'comparision' selected but session_id_b is missing — "
+                "falling back to summary"
+            )
+            return ["summary"]
+
+        valid_routes = {"summary", "chart", "comparision", "stock_price"}
         if route not in valid_routes:
             logger.warning(f"Unknown route '{route}', defaulting to 'summary'")
-            return "summary"
-        
-        return route
+            return ["summary"]
+
+        # Multi-intent fan-out: summary + stock_price
+        if route == "summary" and self._has_explicit_ticker(
+            state.get("question", "")
+        ):
+            logger.info("Multi-intent detected: fanning out to summary + stock_price")
+            return ["summary", "stock_price"]
+
+        return [route]
     
     async def build_graph(self) -> None:
         """
