@@ -67,7 +67,7 @@ class ComparsionAgent:
                     "USER QUESTION: {question}\n\n"
                     "Respond with a JSON object matching ComparisionSummary schema."
                     "CRITICAL: Do not include markdown code blocks, backticks (```), "
-                    "or any preamble/post-amble text. The response must begin with { and end with }."
+                    "or any preamble/post-amble text. The response must begin with {{ and end with }}."
                 )
             )
         ]) 
