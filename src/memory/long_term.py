@@ -11,25 +11,12 @@ from src.logger.custom_logger import logger
 
 
 class ConversationMemory(BaseModel):
-    """Represent a stored memory entry for a session"""
     session_id: str 
     summary: str 
     created_at: datetime 
     updated_at: datetime
 
 class LongTermMemory:
-    """
-    Manages long-term memory in PostgreSQL.
-    
-    For each session, we store a running summary of what the user
-    has discussed. This gets injected into new conversations so the
-    agent has context from previous chats.
-    
-    Table: conversation_memory
-    - session_id (PK)
-    - summary: text summary of past conversations
-    - created_at, updated_at: timestamps
-    """
 
     def __init__(self):
         self.db_path = settings.SQLITE_MEMORY_DB
@@ -50,10 +37,6 @@ class LongTermMemory:
             logger.info("SQLite memory table ready")
         
     async def get_memory(self,session_id: str) -> Optional[str]:
-        """
-        Retrieves the stored summary for a session 
-        Returns None if no memory exists
-        """
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
@@ -68,8 +51,6 @@ class LongTermMemory:
 
 
     async def save_memory(self,session_id: str,summary: str) -> None:
-        """Upsert the memory summary for a session. 
-        Called after each conversation turn to update the summary"""
         
         async with aiosqlite.connect(self.db_path) as db:
             
@@ -95,7 +76,6 @@ class LongTermMemory:
 
 
     async def delete_memory(self,session_id: str) -> None:
-        """Clear memory for a session (useful for testing or reset)."""
         async with aiosqlite.connect(self.db_path) as db:
 
             await db.execute("""

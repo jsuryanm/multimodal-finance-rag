@@ -22,20 +22,6 @@ from src.settings.config import settings
 
 
 class QwenVLEmbeddings(Embeddings):
-    """Text embeddings via Qwen/Qwen3-VL-Embedding-2B.
-
-    Architecture notes
-    ------------------
-    Qwen3-VL-Embedding is a decoder-based model, so the meaningful
-    representation sits at the *last* non-padding token rather than
-    position 0 (as in BERT-style encoders).  We apply last-token
-    pooling and then L2-normalise to unit length before returning.
-
-    Batching
-    --------
-    embed_documents() splits the input list into batches of `batch_size`
-    to keep GPU/CPU memory bounded during large index builds.
-    """
 
     def __init__(
         self,
@@ -63,13 +49,8 @@ class QwenVLEmbeddings(Embeddings):
         self.model.eval()
         logger.info(f"Embedding model ready: {model_name}")
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _resolve_device(device: str) -> str:
-        """Resolve "auto" to the best available device at runtime."""
         if device != "auto":
             return device
         if torch.cuda.is_available():
@@ -83,7 +64,6 @@ class QwenVLEmbeddings(Embeddings):
         last_hidden_state: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> torch.Tensor:
-        """Select the last non-padding token from each sequence."""
         seq_lengths = attention_mask.sum(dim=1) - 1
         batch_idx = torch.arange(
             last_hidden_state.size(0), device=last_hidden_state.device
@@ -102,12 +82,7 @@ class QwenVLEmbeddings(Embeddings):
             out = self.model(**enc)
         vecs = self._last_token_pool(out.last_hidden_state, enc["attention_mask"])
         vecs = F.normalize(vecs, p=2, dim=-1)
-        # Always return float32 on CPU so downstream consumers (ChromaDB, etc.) receive a consistent dtype
         return vecs.cpu().float().tolist()
-
-    # ------------------------------------------------------------------
-    # LangChain Embeddings interface
-    # ------------------------------------------------------------------
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         results: list[list[float]] = []
@@ -122,7 +97,6 @@ class QwenVLEmbeddings(Embeddings):
 
 @lru_cache(maxsize=1)
 def get_qwen_embeddings() -> QwenVLEmbeddings:
-    """Singleton loader — weights are shared across all VectorStore instances."""
     return QwenVLEmbeddings(
         model_name=settings.EMBEDDING_MODEL,
         device=settings.EMBEDDING_DEVICE,

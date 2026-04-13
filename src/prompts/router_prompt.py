@@ -1,14 +1,6 @@
 from langchain_core.prompts import ChatPromptTemplate
 
 
-# NOTE: This file is kept for reference. The orchestrator builds its routing prompt
-# inline in _route_node. If you update the classification logic here, mirror the
-# change in orchestrator_agent.py:_route_node as well.
-#
-# CRITICAL: The route name for comparison is "comparision" (with the extra 'i').
-# This matches the graph node name, valid_routes set, and schema throughout the codebase.
-# Do NOT change it to "comparison" — the LLM output must match exactly.
-
 ROUTER_SYSTEM_PROMPT = """You are a financial query classifier. Your task is to read the user's \
 latest message and classify it into exactly one of the four routes below. Use the conversation \
 history only to resolve context (e.g. "that company", "the same report") — the classification \

@@ -1,4 +1,3 @@
-# tests/test_chart_agent.py
 def test_chart_agent_has_required_methods():
     from src.agents.chart_agent import ChartAgent
     agent = ChartAgent.__dict__

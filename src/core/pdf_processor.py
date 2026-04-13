@@ -20,13 +20,12 @@ fitz.TOOLS.mupdf_display_errors(False)
 
 
 class PDFProcessor:
-    """Extracts text, page images, and chart metadata from annual report PDFs."""
 
     def __init__(self, session_id: str | None = None):
         self.session_id = session_id or str(uuid.uuid4())
         self.session_dir = settings.DATA_DIR / self.session_id
         self.session_dir.mkdir(parents=True, exist_ok=True)
-        self._docling_doc = None  # cached after first parse, reused by detect_chart_pages
+        self._docling_doc = None  
         self._converter = self._build_converter()
 
     def _build_converter(self) -> DocumentConverter:
@@ -47,7 +46,6 @@ class PDFProcessor:
         return dst
 
     def extract_documents(self, pdf_path: Path) -> list[Document]:
-        """Parse PDF with Docling and return structure-aware LangChain Document chunks."""
         try:
             result = self._converter.convert(str(pdf_path))
         except Exception as e:
@@ -124,13 +122,6 @@ class PDFProcessor:
         return paths
 
     def detect_chart_pages(self, pdf_path: Path) -> list[dict]:
-        """Identify pages with tables, raster figures, or vector charts and write chart_pages.json.
-
-        Uses two complementary sources:
-        - Docling: detects real data tables and embedded raster images (doc.tables, doc.pictures)
-        - fitz:    detects vector-drawn charts (bar/line/pie charts exported from Excel or design
-                   tools as PDF vector paths). Docling does NOT see these — they are not images.
-        """
         doc = self._docling_doc or self._parse(pdf_path)
         page_data: dict[int, dict] = {}
 
@@ -139,7 +130,6 @@ class PDFProcessor:
                 page_data[page_no] = {"page": page_no, "tables": 0, "figures": 0,
                                        "vector_charts": 0, "caption": ""}
 
-        # Pass 1 — Docling: real tables and raster figures
         for elements, key in [(doc.tables, "tables"), (doc.pictures, "figures")]:
             for element in elements:
                 if not element.prov:
@@ -150,12 +140,6 @@ class PDFProcessor:
                 if not page_data[page_no]["caption"]:
                     page_data[page_no]["caption"] = self._caption(element, doc)
 
-        # Pass 2 — fitz: vector-drawn charts (bar charts, line graphs, pie charts)
-        # Annual reports from SGX companies use vector charts almost exclusively —
-        # they are produced by Excel/PowerPoint and exported as PDF vector paths,
-        # not as embedded images. Docling's doc.pictures misses all of these.
-        # get_drawings() returns every vector path on a page; a high count reliably
-        # signals a chart. Threshold of 20 paths filters out decorative borders/lines.
         for page_no, path_count in self._vector_chart_pages(pdf_path).items():
             _ensure(page_no)
             page_data[page_no]["vector_charts"] = path_count
@@ -177,13 +161,6 @@ class PDFProcessor:
 
     @staticmethod
     def _vector_chart_pages(pdf_path: Path, threshold: int = 20) -> dict[int, int]:
-        """Return {1-indexed page_no: path_count} for pages that likely contain vector charts.
-
-        fitz.page.get_drawings() returns every vector drawing operation on a page.
-        Pages with >= threshold paths are flagged as likely chart pages.
-        Decorative borders and dividers rarely exceed 5-10 paths; real charts
-        (axes, bars, grid lines, data points) typically produce 20-200+ paths.
-        """
         vector_pages: dict[int, int] = {}
         try:
             pdf = fitz.open(str(pdf_path))
@@ -192,13 +169,12 @@ class PDFProcessor:
                 if len(drawings) >= threshold:
                     vector_pages[i + 1] = len(drawings)  # 1-indexed
             pdf.close()
+        
         except Exception as e:
-            # Non-fatal — vector detection is additive. Docling results still apply.
             logger.warning(f"Vector chart detection failed for {pdf_path.name}: {e}")
         return vector_pages
 
     def _parse(self, pdf_path: Path):
-        """Parse PDF and cache the DoclingDocument. Used when called standalone."""
         try:
             result = self._converter.convert(str(pdf_path))
             self._docling_doc = result.document
@@ -208,7 +184,6 @@ class PDFProcessor:
 
     @staticmethod
     def _chunk_page(chunk) -> int:
-        """Return 1-indexed page number from a HybridChunker chunk, defaulting to 1."""
         try:
             items = chunk.meta.doc_items if chunk.meta else []
             if items and items[0].prov:
@@ -219,7 +194,6 @@ class PDFProcessor:
 
     @staticmethod
     def _caption(element, doc) -> str:
-        """Return the Docling-linked caption for a table or figure, or empty string."""
         try:
             text = element.caption_text(doc) if hasattr(element, "caption_text") else ""
             return (text or "").strip()[:120]
@@ -228,7 +202,6 @@ class PDFProcessor:
 
     @staticmethod
     def _backfill_captions(chart_pages: list[dict], doc) -> list[dict]:
-        """Fill missing captions with the nearest section heading above the page."""
         page_headings: dict[int, str] = {}
         try:
             for item in doc.texts:

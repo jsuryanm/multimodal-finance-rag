@@ -22,12 +22,6 @@ from src.exceptions.custom_exceptions import OrchestratorError
 
 
 class OrchestratorAgent:
-    """
-    Routes user questions to the correct agent.
-
-    Graph flow:
-        START → load_memory → route → [summary | chart | comparision | stock_price] → save_memory → END
-    """
 
     def __init__(self):
         self.llm = get_llm()
@@ -40,7 +34,6 @@ class OrchestratorAgent:
         self._app = None
 
     async def _connect_mcp(self) -> None:
-        """Start MCP server subprocess and load its tools."""
         self._mcp_client = MultiServerMCPClient({
             "finance-tools": {
                 "command": "python",
@@ -53,10 +46,8 @@ class OrchestratorAgent:
         self.stock_agent = StockAgent(mcp_tools)
         logger.info(f"MCP server connected, Tools loaded: {list(mcp_tools.keys())}")
 
-    # ── Graph nodes ─────────────────────────────────────────────────────────────
 
     async def _load_memory_node(self, state: FinanceAgentState) -> dict:
-        """Load prior conversation context from SQLite."""
         summary = await self.long_term_memory.get_memory(state["session_id"])
         if summary:
             logger.info(f"Loaded long-term memory for session {state['session_id']}")
@@ -65,7 +56,6 @@ class OrchestratorAgent:
         return {"long_term_summary": summary or ""}
 
     async def _route_node(self, state: FinanceAgentState) -> dict:
-        """Classify the user's question into one of four routes using the LLM."""
         try:
             structured_llm = self.llm.with_structured_output(RouterDecision)
             system = (
@@ -90,7 +80,6 @@ class OrchestratorAgent:
             raise OrchestratorError("Router LLM call failed", detail=str(e))
 
     async def _summary_node(self, state: FinanceAgentState) -> dict:
-        """Delegate to SummaryAgent."""
         try:
             result = await asyncio.wait_for(
                 self.summary_agent.run(state), timeout=settings.LLM_TIMEOUT
@@ -105,7 +94,6 @@ class OrchestratorAgent:
         }
 
     async def _chart_node(self, state: FinanceAgentState) -> dict:
-        """Delegate to ChartAgent."""
         try:
             result = await asyncio.wait_for(
                 self.chart_agent.run(state), timeout=settings.LLM_TIMEOUT
@@ -120,7 +108,6 @@ class OrchestratorAgent:
         }
 
     async def _comparision_node(self, state: FinanceAgentState) -> dict:
-        """Delegate to ComparsionAgent."""
         try:
             result = await asyncio.wait_for(
                 self.comparision_agent.run(state), timeout=settings.LLM_TIMEOUT
@@ -149,7 +136,6 @@ class OrchestratorAgent:
         }
 
     async def _save_memory_node(self, state: FinanceAgentState) -> dict:
-        """Append the latest Q&A to long-term memory (capped at 3000 chars)."""
         question = state.get("question", "")
         answer = state.get("answer", "")
         if not answer:
@@ -162,18 +148,15 @@ class OrchestratorAgent:
         logger.info(f"Saved long-term memory for session: {state['session_id']}")
         return {}
 
-    # ── Routing ─────────────────────────────────────────────────────────────────
 
     def _decide_route(self, state: FinanceAgentState) -> str:
         """Apply override rules on top of the LLM's route decision."""
         route = state.get("route", "summary")
 
-        # Two PDFs uploaded → always compare
         if state.get("session_id_b"):
             logger.info("session_id_b detected — forcing comparision route")
             return "comparision"
 
-        # LLM picked comparision but second doc is missing → fall back
         if route == "comparision" and not state.get("session_id_b"):
             logger.warning("'comparision' selected but session_id_b missing — falling back to summary")
             return "summary"
@@ -184,7 +167,6 @@ class OrchestratorAgent:
 
         return route
 
-    # ── Graph lifecycle ──────────────────────────────────────────────────────────
 
     async def build_graph(self) -> None:
         """Connect to MCP and compile the LangGraph StateGraph. Call once at startup."""
@@ -229,7 +211,6 @@ class OrchestratorAgent:
         page_number: int | None = None,
         thread_id: str | None = None,
     ) -> dict:
-        """Run the orchestrator and return the final answer."""
         if self._app is None:
             await self.build_graph()
 
@@ -256,14 +237,6 @@ class OrchestratorAgent:
         page_number: int | None = None,
         thread_id: str | None = None,
     ):
-        """
-        Stream the response: emit a route badge then the full answer text.
-
-        All agents (summary, comparision, chart) run to completion internally before
-        yielding — their LLMs output structured JSON so token-by-token streaming
-        would expose raw JSON to the UI. The answer text is extracted from the
-        structured output and yielded in one shot.
-        """
         if self._app is None:
             await self.build_graph()
 
@@ -286,7 +259,6 @@ class OrchestratorAgent:
             yield f"[ERROR] {e}"
 
 
-# ── Singleton ────────────────────────────────────────────────────────────────────
 
 _orchestrator: OrchestratorAgent | None = None
 

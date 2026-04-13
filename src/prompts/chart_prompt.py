@@ -1,8 +1,6 @@
-# src/prompts/chart_prompt.py — replace the file entirely
 
 from langchain_core.prompts import ChatPromptTemplate
 
-# ── Base system prompt ──────────────────────────────────────────────────────
 
 CHART_BASE_PROMPT = """You are a financial analyst specialising in visual data from SGX annual \
 reports. You are given a high-resolution page image. Your task is to identify and describe every \
@@ -40,8 +38,6 @@ Do NOT double the braces. Output plain JSON.
 }
 """
 
-# ── Per-type guidance injected BEFORE the base prompt ─────────────────────
-# Each string is appended to CHART_BASE_PROMPT when that chart type is detected.
 
 _TYPE_GUIDANCE: dict[str, str] = {
     "bar": """## Bar chart specific guidance

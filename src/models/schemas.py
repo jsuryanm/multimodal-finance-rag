@@ -5,13 +5,11 @@ from typing import Optional,Literal
 # Agent Outputs
 
 class RouterDecision(BaseModel):
-    # The orchestrators router decision
     route: str = Field(description="One of: summary, chart, comparision, stock_price")
     reasoning: str = Field(description="Brief reason for this routing decision")
     
 
 class FinancialSummary(BaseModel):
-    # Structured financial metrics extracted from annual report 
     revenue: Optional[str] = Field(default=None,
                                    description="Total revenue with currency, units and year. E.g. 'SGD 22.3 billion (2024)'")
     
@@ -54,14 +52,9 @@ CHART_TYPES = Literal[
 ]
 
 class ChartIntent(BaseModel):
-    """Extracted intent from the user's chart question.
-    
-    Used to (1) score page selection and (2) inject type-specific
-    guidance into the vision LLM prompt so it knows what to look for.
-    """
     chart_type: CHART_TYPES = "unknown"
-    explicit_page: Optional[int] = None      # set if user said "page 12"
-    topic_keywords: list[str] = []           # e.g. ["revenue", "segment"]
+    explicit_page: Optional[int] = None      
+    topic_keywords: list[str] = []           
 
 
 
@@ -70,14 +63,12 @@ class ChartAnalysis(BaseModel):
     title: Optional[str] = Field(default=None, description="Chart or table title if visible")
     time_period: Optional[str] = Field(default=None, description="Time period covered")
     
-    # These were the broken fields — make them Optional with fallback defaults
     key_values: Optional[str] = Field(default=None, description="Most important numerical values shown")
     trend: Optional[str] = Field(default=None, description="Overall trend direction and magnitude")
     key_insight: Optional[str] = Field(default=None, description="Single most important insight from the visual")
     explanation: Optional[str] = Field(default=None, description="Full explanation in financial terms")
 
 class ComparisionRow(BaseModel):
-    # A single row in the comparision table
     metric: str 
     company_a: str
     company_b: str

@@ -13,10 +13,6 @@ from src.settings.config import settings
 
 
 class VectorStore:
-    """Manages ChromaDB collection lifecycle:
-    build, load, and retrieve.
-    One collection per session, persisted to disk."""
-
     def __init__(self, session_id: str):
         self.session_id = session_id
         self.index_dir = settings.CHROMA_DIR / session_id
@@ -24,11 +20,6 @@ class VectorStore:
         self._store: Chroma | None = None
 
     def build_index(self, documents: list[Document]) -> None:
-        """Create ChromaDB collection from docs and persist to disk.
-
-        Filters out low-quality chunks before indexing, and retries the
-        embedding call up to 3 times with exponential backoff.
-        """
         if not documents:
             raise VectorStoreError("No documents provided for indexing")
         
@@ -100,11 +91,6 @@ class VectorStore:
         fetch_k: int = 20,
         lambda_mult: float = 0.5,
     ):
-        """Return a LangChain retriever from the loaded ChromaDB store.
-
-        fetch_k: Number of candidates for MMR reranking.
-        lambda_mult: Diversity vs relevance (0=diverse, 1=relevant).
-        """
         if self._store is None:
             self.load_index()
 

@@ -33,10 +33,7 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: str = Field(default="")
 
 
-    # Embeddings — local Qwen3-VL model (no API key required)
     EMBEDDING_MODEL: str = "Qwen/Qwen3-VL-Embedding-2B"
-    # Device for the local embedding model. "auto" detects CUDA → MPS → CPU at runtime.
-    # Override in .env with EMBEDDING_DEVICE=cuda / cpu / mps
     EMBEDDING_DEVICE: str = "auto"
 
     # Maximum completion tokens (comparison responses need 2000+ for full JSON)

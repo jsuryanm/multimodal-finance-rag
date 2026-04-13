@@ -36,8 +36,6 @@ def _check_backend() -> bool:
         return False
 
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-
 def _render_sidebar():
     with st.sidebar:
         st.title("📊 Finance RAG")
@@ -107,7 +105,6 @@ def _upload_file(file, slot: str):
                 st.error("Cannot reach backend. Is it running?")
 
 
-# ── Chat ──────────────────────────────────────────────────────────────────────
 
 def _render_chat():
     for msg in st.session_state.messages:
@@ -125,7 +122,6 @@ def _render_chat():
 
 
 def _stream_answer(question: str):
-    # page_number is no longer sent — the chart agent auto-detects the best page
     payload = {
         "session_id": st.session_state.session_id,
         "session_id_b": st.session_state.session_id_b,
@@ -145,8 +141,6 @@ def _stream_answer(question: str):
                 line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
                 if not line.startswith("data: "):
                     continue
-                # Backend JSON-encodes every SSE payload so embedded newlines
-                # in multi-line agent answers survive the `data: ...\n\n` frame.
                 try:
                     data = json.loads(line[6:])
                 except json.JSONDecodeError:
@@ -171,15 +165,13 @@ def _stream_answer(question: str):
     })
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-
 def main():
-    st.set_page_config(page_title="Finance RAG", page_icon="📊", layout="wide")
+    st.set_page_config(page_title="Finance RAG", layout="wide")
     _init_state()
 
     if not _check_backend():
         st.error(
-            "⚠️ Backend not reachable at `http://localhost:8000` — "
+            " Backend not reachable at `http://localhost:8000` — "
             "run `uv run uvicorn backend.app:app --reload --port 8000` first."
         )
         return

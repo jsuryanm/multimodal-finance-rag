@@ -6,11 +6,6 @@ from src.logger.custom_logger import logger
 
 
 async def get_checkpointer():
-    """Returns async sqlite checkpointer for LangGraph
-    checkpointer saves full graph state at every node
-    if request fails we can resume from last checkpoint"""
-
-    # checkpointer creates DB connection
     db_path = settings.SQLITE_CHECKPOINT
     db_path.parent.mkdir(parents=True,exist_ok=True)
 

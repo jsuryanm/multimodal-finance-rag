@@ -30,7 +30,6 @@ class StockAgent:
             ),
         )
 
-    # src/agents/stock_agent.py
 
     async def run(self, state: FinanceAgentState) -> dict:
         question = state["question"]
@@ -38,7 +37,7 @@ class StockAgent:
             result = await self.agent.ainvoke({
                 "messages": [{"role": "user", "content": question}]
             })
-            # AIMessage is an object — use .content, not ["content"]
+            
             last_message = result["messages"][-1]
             answer = last_message.content if hasattr(last_message, "content") else str(last_message)
             
